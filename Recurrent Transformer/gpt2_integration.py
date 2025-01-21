@@ -42,7 +42,7 @@ dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # Use batch_size=1
 optimizer = AdamW(model.parameters(), lr=5e-5)
 
 # Step 8: Fine-tuning loop
-epochs = 12  # Number of epochs to train
+epochs = 25  # Number of epochs to train
 for epoch in range(epochs):
     model.train()  # Set the model to training mode
     loop = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
@@ -74,7 +74,7 @@ tokenizer = GPT2Tokenizer.from_pretrained("fine_tuned_gpt2")
 model.to(device)
 
 # Generate text
-input_text = "Hotel Check-in Policy"
+input_text = "Hotel Check-in Policy: Check-in time starts from 3:00 PM. Early check-in is available upon request, subject to availability."
 input_ids = tokenizer.encode(input_text, return_tensors='pt').to(device)
 
 # Generate predictions
