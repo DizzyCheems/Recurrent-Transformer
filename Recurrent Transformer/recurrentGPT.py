@@ -36,7 +36,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 class AttentionStream(nn.Module):
-    def __init__(self, vocab_size, embedding_dim=256, hidden_dim=256, num_layers=8, dropout=0.2, num_classes=16):
+    def __init__(self, vocab_size, embedding_dim=256, hidden_dim=256, num_layers=16, dropout=0.2, num_classes=32):
         super(AttentionStream, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.rnn = nn.RNN(embedding_dim, hidden_dim, num_layers=num_layers, dropout=dropout, batch_first=True)
@@ -105,9 +105,9 @@ class AttentionStream(nn.Module):
 
 def main():
     seq_length = 512  # Adjusted for question-answer pairs
-    batch_size = 4    # Adjusted batch size for smaller dataset
-    num_epochs = 10   # Increased for better training
-    learning_rate = 0.0001
+    batch_size = 8    # Adjusted batch size for smaller dataset
+    num_epochs = 100   # Increased for better training
+    learning_rate = 0.00001
     model_file = 'attention_stream_model.pth'
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
