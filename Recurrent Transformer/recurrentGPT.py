@@ -44,14 +44,14 @@ class AttentionStream(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         # Linear projections for attention mechanism
-        self.attention_character = nn.Linear(hidden_dim, hidden_dim)  # Receptance vector (C_t)
-        self.time_modulation = nn.Parameter(torch.ones(hidden_dim))  # Time-decay factor (W_t)
-        self.attention_key = nn.Linear(hidden_dim, hidden_dim)  # Key vector (A_t)
-        self.attention_value = nn.Linear(hidden_dim, hidden_dim)  # Value vector (T_t)
+        self.attention_character = nn.Linear(hidden_dim, hidden_dim)  # Receptance vector
+        self.time_modulation = nn.Parameter(torch.ones(hidden_dim))  # Weight decay vector
+        self.attention_key = nn.Linear(hidden_dim, hidden_dim)  # Key vector
+        self.attention_value = nn.Linear(hidden_dim, hidden_dim)  # Value vector
         self.output_weights = nn.Linear(hidden_dim, hidden_dim)  # Output weights
 
-        self.sequence_merging = nn.Linear(hidden_dim * 2, hidden_dim)  # For combining sequence inputs
-        self.class_merging = nn.Linear(hidden_dim * 2, hidden_dim)  # Class merging (channel mixing)
+        self.sequence_merging = nn.Linear(hidden_dim * 2, hidden_dim)  # For combining inputs
+        self.class_merging = nn.Linear(hidden_dim * 2, hidden_dim)  # Class merging
 
         # Add a classification layer
         self.classification_layer = nn.Linear(hidden_dim, num_classes)
@@ -61,11 +61,6 @@ class AttentionStream(nn.Module):
         self.layer_norm_attention = nn.LayerNorm(hidden_dim)
         self.layer_norm_output = nn.LayerNorm(hidden_dim)
 
-        # Channel mixing learnable weight matrices
-        self.Wr = nn.Linear(hidden_dim, hidden_dim)
-        self.Wk = nn.Linear(hidden_dim, hidden_dim)
-        self.Wv = nn.Linear(hidden_dim, hidden_dim)
-
     def forward(self, x):
         x = self.embedding(x)
         
@@ -74,87 +69,38 @@ class AttentionStream(nn.Module):
         rnn_out = self.layer_norm_rnn(rnn_out + x)  # Residual connection with layer norm
         rnn_out = self.dropout(rnn_out)
 
-        # Token merging with residual connection and LayerNorm (shifted for temporal context)
+        # Token merging with residual connection and LayerNorm
         prev_x = torch.roll(rnn_out, shifts=1, dims=1)  # Shift tokens for token merging
 
-        # Attention vectors (Receptance, Key, and Value vectors)
-        C_t = self.attention_character(rnn_out) + self.attention_character(prev_x)  # Receptance (C_t)
-        A_t = self.attention_key(rnn_out) + self.attention_key(prev_x)  # Key (A_t)
-        T_t = self.attention_value(rnn_out) + self.attention_value(prev_x)  # Value (T_t)
+        C_t = self.attention_character(rnn_out) + self.attention_character(prev_x)
+        A_t = self.attention_key(rnn_out) + self.attention_key(prev_x)
+        T_t = self.attention_value(rnn_out) + self.attention_value(prev_x)
 
-        # Apply time modulation on Receptance (C_t)
-        C_t = C_t * self.time_modulation  # Apply time modulation here (time decay)
+        # Apply time modulation on C_t
+        C_t = C_t * self.time_modulation  # Apply time modulation here
 
-        # Sequence merging (time-mixing) with residual connection and LayerNorm
-        mixed_input = self._time_mixing(A_t, T_t)  # Time-mixing formulation (Parallel for training)
+        # Sequence merging with residual connection and LayerNorm
+        mixed_input = self.sequence_merging(torch.cat([C_t, A_t], dim=-1))
         mixed_input = self.layer_norm_attention(mixed_input + C_t)  # Residual connection with LayerNorm
 
-        # Class merging (channel-mixing) with residual connection and LayerNorm
-        mixed_output = self._channel_mixing(mixed_input)  # Channel mixing
+        # Class merging with residual connection and LayerNorm
+        mixed_output = self.class_merging(torch.cat([mixed_input, T_t], dim=-1))
         mixed_output = self.layer_norm_attention(mixed_output + mixed_input)  # Residual connection with LayerNorm
 
         # Apply time modulation again to mixed_output
-        mixed_output = mixed_output * self.time_modulation  # Apply time modulation again
+        mixed_output = mixed_output * self.time_modulation  # Apply time modulation again here
 
         # Output gating with residual connection and LayerNorm
         ot = self.output_weights(mixed_output)
         ot = self.layer_norm_output(ot + mixed_output)  # Residual connection with LayerNorm
 
-        # Language model output (token prediction)
+        # Language model output
         token_output = self.fc(ot)
 
         # Classification output (based on the last token's hidden state)
         class_output = self.classification_layer(rnn_out[:, -1, :])  # Use the last token's output for classification
 
         return token_output, class_output
-
-    def _time_mixing(self, A_t, T_t):
-        """
-        Time-mixing block with parallel formulation for training and sequential formulation for inference.
-        This computes the weighted sum of keys and values across all time steps.
-        """
-        if self.training:
-            # Parallel Formulation (Training)
-            decay_factor = torch.exp(self.time_modulation)  # Time-decay factor (W_t)
-
-            # Calculate weighted key-value sum for all time steps
-            weighted_keys = torch.exp(A_t - decay_factor.unsqueeze(0))  # exp(k_t - w * (T-t))
-            weighted_values = torch.exp(A_t) * T_t  # exp(k_t) * v_t
-
-            # Sum over all time steps (this ensures sequence length is preserved)
-            key_weighted_sum = torch.sum(weighted_keys * weighted_values, dim=1, keepdim=True)  # Weighted sum of values
-            normalization_factor = torch.sum(weighted_keys, dim=1, keepdim=True)  # Normalization factor for the sum
-
-            # Return the normalized weighted sum for parallel computation
-            return key_weighted_sum / (normalization_factor + 1e-6)  # Avoid division by zero
-        
-        else:
-            # Sequential Formulation (Inference)
-            batch_size, seq_length, hidden_dim = A_t.size()
-            
-            # Initialize at and bt for the sequential update
-            at = torch.zeros(batch_size, hidden_dim, device=A_t.device)  # at−1 for the first time step
-            bt = torch.zeros(batch_size, hidden_dim, device=A_t.device)  # bt−1 for the first time step
-
-            # Sequentially process each time step
-            for t in range(seq_length):
-                exp_kt = torch.exp(A_t[:, t, :])  # exp(k_t)
-                
-                # Update `at` and `bt` for each time step
-                at = torch.exp(self.time_modulation) * at + exp_kt  # Update `at` using the time-decay factor
-                bt = torch.exp(self.time_modulation) * bt + exp_kt * T_t[:, t, :]  # Update `bt` using the time-decay factor
-
-            # The final time-mixed value for inference
-            return bt / (at + 1e-6)  # Normalize by `at`
-
-    def _channel_mixing(self, x):
-        """
-        Channel-mixing block using gating mechanism.
-        This computes a non-linear transformation across the feature dimensions.
-        """
-        # Apply gating mechanism: element-wise multiplication of transformed inputs
-        gated = torch.sigmoid(self.Wr(x)) * torch.relu(self.Wv(self.Wk(x)))
-        return gated
 
 
 def main():
@@ -213,7 +159,7 @@ def main():
         torch.save(model.state_dict(), model_file)
 
     def generate_text(model, start_text, length=150):
-        model.eval()  # Set the model to evaluation mode (uses sequential formulation)
+        model.eval()
         input_text = [dataset.char_to_idx.get(char, 0) for char in start_text]
         input_seq = torch.tensor(input_text, dtype=torch.long).unsqueeze(0).to(device)
         generated = start_text
@@ -228,7 +174,6 @@ def main():
             input_seq = torch.cat((input_seq[:, 1:], torch.tensor([[next_char_idx]], device=device)), dim=1)
         
         return generated
-
 
     # Define color codes
     BLUE = '\033[94m'  # Blue color for user input
