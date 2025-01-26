@@ -23,7 +23,7 @@ tokenizer.pad_token = tokenizer.eos_token
 # Move the GPT-2 model to the GPU (or CPU if no GPU is available)
 gpt2_model.to(device)
 
-# Step 6: Read and tokenize the updated dataset from the text file
+# Step 6: Read and tokenize the updated dataset from the text fileS
 with open("train_data.txt", "r") as file:
     text_data = file.read()
 
