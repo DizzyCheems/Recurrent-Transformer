@@ -3,7 +3,7 @@
 # pip install transformers torch datasets
 
 # Step 2: Import necessary libraries
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, AdamW
+from transformers import GPT2LMHeadModel, GPT2Tokenizer, AdamW, get_linear_schedule_with_warmup
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 from tqdm import tqdm
@@ -23,7 +23,7 @@ tokenizer.pad_token = tokenizer.eos_token
 # Move the GPT-2 model to the GPU (or CPU if no GPU is available)
 gpt2_model.to(device)
 
-# Step 6: Read and tokenize the updated dataset from the text fileS
+# Step 6: Read and tokenize the updated dataset from the text file
 with open("train_data.txt", "r") as file:
     text_data = file.read()
 
@@ -40,31 +40,46 @@ dataloader = DataLoader(dataset, batch_size=2, shuffle=True)  # Increase batch s
 # Step 7: Set up the optimizer
 optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
 
-# Step 8: Fine-tuning loop
-epochs = 16  # Increase the number of epochs
-for epoch in range(epochs):
+# Step 8: Set up learning rate scheduler
+total_steps = len(dataloader) * 16  # Update with the number of epochs you want
+warmup_steps = total_steps // 10  # Warmup for the first 10% of training steps
+scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
+
+# Step 9: Fine-tuning loop
+accumulation_steps = 8  # Use gradient accumulation to simulate larger batch size
+max_grad_norm = 1.0  # Gradient clipping
+
+for epoch in range(16):  # Increase the number of epochs as necessary
     gpt2_model.train()  # Set the model to training mode
-    loop = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}")
-    for batch in loop:
+    loop = tqdm(dataloader, desc=f"Epoch {epoch+1}/16")
+    for batch_idx, batch in enumerate(loop):
         input_ids, attention_mask = batch
 
         # Forward pass
         outputs = gpt2_model(input_ids, attention_mask=attention_mask, labels=input_ids)
         loss = outputs.loss
+        loss = loss / accumulation_steps  # Scale loss for gradient accumulation
 
         # Backward pass
-        optimizer.zero_grad()
         loss.backward()
-        optimizer.step()
+
+        # Gradient accumulation and optimizer step
+        if (batch_idx + 1) % accumulation_steps == 0:
+            optimizer.step()
+            scheduler.step()  # Update the learning rate
+            optimizer.zero_grad()
+
+            # Clip gradients to avoid exploding gradients
+            torch.nn.utils.clip_grad_norm_(gpt2_model.parameters(), max_grad_norm)
 
         # Update the progress bar
         loop.set_postfix(loss=loss.item())
 
-# Step 9: Save the fine-tuned model
+# Step 10: Save the fine-tuned model
 gpt2_model.save_pretrained("fine_tuned_gpt2_medium")
 tokenizer.save_pretrained("fine_tuned_gpt2_medium")
 
-# Step 10: Generate text using the fine-tuned GPT-2 model
+# Step 11: Generate text using the fine-tuned GPT-2 model
 # Load the fine-tuned GPT-2 model
 gpt2_model = GPT2LMHeadModel.from_pretrained("fine_tuned_gpt2_medium")
 tokenizer = GPT2Tokenizer.from_pretrained("fine_tuned_gpt2_medium")
