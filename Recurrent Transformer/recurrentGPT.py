@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.optim as optim
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-# Adjustments: Loading GPT-2 model and tokenizer
+# Adjustments: Loading GPT-2 model and tokenizers
 class HybridModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim=256, hidden_dim=256, num_layers=8, dropout=0.2, num_classes=16):
         super(HybridModel, self).__init__()
