@@ -1,23 +1,116 @@
-Hotel Check-in Policy:
-Check-in time starts from 3:00 PM. Early check-in is available upon request, subject to availability.
+<|question|> What is the currency of Japan? 
+<|answer|> The currency of Japan is the Yen (¥), which is abbreviated as JPY in financial markets. The Yen is one of the most traded currencies in the world and is widely used in international markets. It was introduced in 1871 as part of Japan's modernization and industrialization efforts during the Meiji Restoration. <|endoftext|>
 
-Hotel Check-out Policy:
-Check-out time is before 11:00 AM. Late check-out may be allowed with prior approval and may incur additional charges.
+<|question|> Who painted the Mona Lisa? 
+<|answer|> The Mona Lisa was painted by Leonardo da Vinci, one of the most renowned artists of the Italian Renaissance. The painting is believed to have been created between 1503 and 1506 and is now housed in the Louvre Museum in Paris. The Mona Lisa is famous for its enigmatic expression, use of perspective, and the mysterious identity of the woman depicted in the painting. <|endoftext|>
 
-Cancellation Policy:
-Free cancellation is available up to 24 hours before check-in. Cancellations made within 24 hours of check-in will incur a one-night charge.
+<|question|> What is the chemical symbol for gold? 
+<|answer|> The chemical symbol for gold is Au, derived from the Latin word aurum, meaning "shining dawn" or "glow of sunrise." Gold is a soft, yellow metal that has been valued for its beauty and rarity for thousands of years. It is highly conductive and non-reactive, making it ideal for use in electronics and jewelry. <|endoftext|>
 
-Pet Policy:
-Pets are allowed at an additional charge of $25 per night. Only small dogs are permitted, and they must remain on a leash in public areas. Additionally, pets are allowed in the hotel only if guests have purchased diapers for the pets, which are sold in the hotel's utility shop. Pets without diapers are not allowed in any common areas. Guests must ensure that their pets are well-behaved and do not disturb other guests.
- 
-Smoking Policy:
-This is a non-smoking hotel. Smoking is not permitted in rooms or indoor public spaces. A $200 cleaning fee will be charged for smoking violations.
+<|question|> What is the fastest land animal? 
+<|answer|> The fastest land animal is the cheetah, which can reach speeds of up to 60 miles per hour (97 kilometers per hour) in short bursts covering distances of up to 1,500 feet (460 meters). The cheetah's incredible speed is attributed to its lightweight build, specialized muscles, and large nasal passages, which allow for rapid oxygen intake during high-speed chases. <|endoftext|>
 
-Payment Policy: 
-We accept major credit cards, debit cards, and cash payments. Full payment is required at check-in.
+<|question|> How many bones are in the human skull? 
+<|answer|> The human skull is made up of 22 bones, which can be categorized into two main sections: the cranium and the facial bones. The cranium houses and protects the brain, while the facial bones give structure to the face and support the senses. These bones are joined together by sutures, which are immovable joints that fuse as a person ages. <|endoftext|>
 
-Parking Policy:
-Complimentary parking is available for registered guests. Additional parking for visitors is available for $10 per day.
+<|question|> What is the largest organ in the human body? 
+<|answer|> The largest organ in the human body is the skin, which covers the entire body and serves as a protective barrier against physical injury, infection, and dehydration. The skin also plays a crucial role in regulating body temperature and allows for the sensation of touch, pressure, and pain. It is made up of multiple layers, including the epidermis, dermis, and subcutaneous tissue. <|endoftext|>
 
-Noise Policy:
-Guests are asked to keep noise to a minimum between 10:00 PM and 7:00 AM to ensure a peaceful environment for all.
+<|question|> How many chambers are in the human heart? 
+<|answer|> The human heart has four chambers: two atria and two ventricles. The right atrium receives deoxygenated blood from the body and pumps it into the right ventricle, which then sends it to the lungs for oxygenation. The left atrium receives oxygenated blood from the lungs and pumps it into the left ventricle, which sends it throughout the body to deliver oxygen to tissues and organs. <|endoftext|>
+
+<|question|> What is the function of white blood cells? 
+<|answer|> White blood cells are part of the immune system and help the body fight infections and diseases. <|endoftext|>
+
+<|question|> What is the largest artery in the human body? 
+<|answer|> The largest artery in the human body is the aorta. <|endoftext|>
+
+<|question|> How many layers does the skin have? 
+<|answer|> The skin has three main layers: the epidermis, dermis, and subcutaneous layer. <|endoftext|>
+
+<|question|> What is the role of the kidneys? 
+<|answer|> The kidneys filter waste products from the blood and regulate fluid balance and electrolytes. <|endoftext|>
+
+<|question|> What is the average resting heart rate for adults? 
+<|answer|> The average resting heart rate for adults is between 60 and 100 beats per minute. <|endoftext|>
+
+<|question|> What is the powerhouse of the cell? 
+<|answer|> The powerhouse of the cell is the mitochondria. <|endoftext|>
+
+<|question|> Who discovered penicillin? 
+<|answer|> Penicillin was discovered by Alexander Fleming. <|endoftext|>
+
+<|question|> What is the main language spoken in Brazil? 
+<|answer|> The main language spoken in Brazil is Portuguese. <|endoftext|>
+
+<|question|> What is the largest ocean on Earth? 
+<|answer|> The largest ocean on Earth is the Pacific Ocean. <|endoftext|>
+
+<|question|> Who was the first president of the United States? 
+<|answer|> The first president of the United States was George Washington. <|endoftext|>
+
+<|question|> What is the freezing point of water? 
+<|answer|> The freezing point of water is 0 degrees Celsius. <|endoftext|>
+
+<|question|> What is the formula for calculating the area of a circle? 
+<|answer|> The formula for calculating the area of a circle is πr². <|endoftext|>
+
+<|question|> How many planets are in our solar system? 
+<|answer|> There are eight planets in our solar system. <|endoftext|>
+
+<|question|> What is the main ingredient in guacamole? 
+<|answer|> The main ingredient in guacamole is avocado. <|endoftext|>
+
+<|question|> What is the largest mammal in the world? 
+<|answer|> The largest mammal in the world is the blue whale. <|endoftext|>
+
+<|question|> What is the longest river in the world? 
+<|answer|> The longest river in the world is the Nile River. <|endoftext|>
+
+<|question|> Who invented the telephone? 
+<|answer|> The telephone was invented by Alexander Graham Bell. <|endoftext|>
+
+<|question|> What is the hardest natural substance on Earth? 
+<|answer|> The hardest natural substance on Earth is diamond. <|endoftext|>
+
+<|question|> What is the capital of Japan? 
+<|answer|> The capital of Japan is Tokyo. <|endoftext|>
+
+<|question|> What is Japan's capital city? 
+<|answer|> The capital city of Japan is Tokyo. <|endoftext|>
+
+<|question|> Can you tell me the capital of Japan? 
+<|answer|> Japan's capital is Tokyo. <|endoftext|>
+
+<|question|> Which city is the capital of Japan? 
+<|answer|> The capital of Japan is Tokyo. <|endoftext|>
+
+<|question|> What city serves as the capital of Japan? 
+<|answer|> Tokyo is the capital of Japan. <|endoftext|>
+
+<|question|> Name the capital of Japan. 
+<|answer|> The capital of Japan is Tokyo. <|endoftext|>
+
+<|question|> Where is the capital located in Japan? 
+<|answer|> The capital of Japan is located in Tokyo. <|endoftext|>
+
+<|question|> Which city holds the title of capital in Japan? 
+<|answer|> The title of the capital of Japan belongs to Tokyo. <|endoftext|>
+
+<|question|> What is the main city of Japan? 
+<|answer|> The main city of Japan is Tokyo. <|endoftext|>
+
+<|question|> Who wrote "1984"? 
+<|answer|> "1984" was written by George Orwell. <|endoftext|>
+
+<|question|> What is the speed of light? 
+<|answer|> The speed of light is approximately 299,792 kilometers per second. <|endoftext|>
+
+<|question|> What is a group of lions called? 
+<|answer|> A group of lions is called a pride. <|endoftext|>
+
+<|question|> What is the main gas found in the air we breathe? 
+<|answer|> The main gas found in the air we breathe is nitrogen. <|endoftext|>
+
+<|question|> What does DNA stand for? 
+<|answer|> DNA stands for deoxyribonucleic acid. <|endoftext|>
