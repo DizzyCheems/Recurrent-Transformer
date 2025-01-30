@@ -4,12 +4,43 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader, random_split
 import torch.nn as nn
 import torch.optim as optim
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-# Adjustments: Loading GPT-2 model and tokenizers
-class HybridModel(nn.Module):
+# Updated TextDataset to work at word-level
+class TextDataset(Dataset):
+    def __init__(self, text, seq_length):
+        self.text = text
+        self.seq_length = seq_length
+        
+        # Tokenizing text into words
+        self.words = text.split()  # Simple whitespace split
+        self.vocab = sorted(set(self.words))  # Create a vocabulary of unique words
+        self.vocab_size = len(self.vocab)
+        
+        # Word to index and index to word mappings
+        self.word_to_idx = {word: idx for idx, word in enumerate(self.vocab)}
+        self.idx_to_word = {idx: word for word, idx in self.word_to_idx.items()}
+        
+        # Convert text into a sequence of word indices
+        self.data = torch.tensor([self.word_to_idx[word] for word in self.words], dtype=torch.long)
+        
+    def __len__(self):
+        return len(self.data) - self.seq_length
+
+    def __getitem__(self, idx):
+        x = self.data[idx:idx+self.seq_length]
+        y = self.data[idx+1:idx+self.seq_length+1]
+        return x, y
+
+def load_text_data(folder_path):
+    text = ''
+    file_path = os.path.join(folder_path, 'qa_dataset.txt')  # Adjusted for your dataset
+    with open(file_path, 'r', encoding='utf-8') as file:
+        text = file.read()
+    return text
+
+class AttentionStream(nn.Module):
     def __init__(self, vocab_size, embedding_dim=256, hidden_dim=256, num_layers=8, dropout=0.2, num_classes=16):
-        super(HybridModel, self).__init__()
+        super(AttentionStream, self).__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.rnn = nn.RNN(embedding_dim, hidden_dim, num_layers=num_layers, dropout=dropout, batch_first=True)
         self.fc = nn.Linear(hidden_dim, vocab_size)
@@ -75,63 +106,19 @@ class HybridModel(nn.Module):
         return token_output, class_output
 
 
-def load_text_data(folder_path):
-    text = ''
-    file_path = os.path.join(folder_path, 'qa_dataset.txt')  # Adjusted for your dataset
-    with open(file_path, 'r', encoding='utf-8') as file:
-        text = file.read()
-    return text
-
-
-class TextDataset(Dataset):
-    def __init__(self, text, tokenizer, seq_length):
-        self.text = text
-        self.seq_length = seq_length
-        self.tokenizer = tokenizer
-        self.vocab_size = len(tokenizer)  # The vocab size comes from the GPT-2 tokenizer
-        self.tokenized_data = tokenizer.encode(text)  # Tokenize the entire dataset
-
-    def __len__(self):
-        return len(self.tokenized_data) - self.seq_length
-
-    def __getitem__(self, idx):
-        x = torch.tensor(self.tokenized_data[idx:idx + self.seq_length], dtype=torch.long)
-        y = torch.tensor(self.tokenized_data[idx + 1:idx + self.seq_length + 1], dtype=torch.long)
-        return x, y
-
-
-# Initialize GPT-2 model and tokenizer
-def load_gpt2_model():
-    tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
-    model = GPT2LMHeadModel.from_pretrained("gpt2")
-    model.eval()
-    return model, tokenizer
-
-
-def generate_gpt2_prompt(model, tokenizer, prompt_text, max_length=100):
-    input_ids = tokenizer.encode(prompt_text, return_tensors="pt")
-    with torch.no_grad():
-        output = model.generate(input_ids, max_length=max_length, num_return_sequences=1, no_repeat_ngram_size=2, temperature=0.7)
-    generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
-    return generated_text
-
-
 def main():
     seq_length = 512  # Adjusted for question-answer pairs
-    batch_size = 4    # Adjusted batch size for smaller dataset
-    num_epochs = 10   # Increased for better training
+    batch_size = 16    # Adjusted batch size for smaller dataset
+    num_epochs = 5   # Increased for better training
     learning_rate = 0.0001
-    model_file = 'hybrid_attention_stream_model.pth'
+    model_file = 'attention_stream_model.pth'
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Load GPT-2 tokenizer
-    gpt2_model, gpt2_tokenizer = load_gpt2_model()
-
     text_data = load_text_data('text-data')
-    dataset = TextDataset(text_data, gpt2_tokenizer, seq_length)
+    dataset = TextDataset(text_data, seq_length)
 
-    model = HybridModel(vocab_size=dataset.vocab_size)
+    model = AttentionStream(vocab_size=dataset.vocab_size)
     model = model.to(device)
 
     # Check if the model already exists
@@ -159,7 +146,8 @@ def main():
 
                 # Compute loss for both token generation and classification
                 token_loss = criterion(token_output.view(-1, dataset.vocab_size), y_batch.view(-1))
-                class_labels = torch.zeros(x_batch.size(0), dtype=torch.long).to(device)
+                # Assuming you have labels for classification (e.g., stored in 'class_labels')
+                class_labels = torch.zeros(x_batch.size(0), dtype=torch.long).to(device)  # Example, replace with actual labels
                 class_loss = criterion(class_output, class_labels)
 
                 loss = token_loss + class_loss
@@ -175,7 +163,7 @@ def main():
 
     def generate_text(model, start_text, length=150):
         model.eval()
-        input_text = gpt2_tokenizer.encode(start_text)
+        input_text = [dataset.word_to_idx.get(word, 0) for word in start_text.split()]
         input_seq = torch.tensor(input_text, dtype=torch.long).unsqueeze(0).to(device)
         generated = start_text
         
@@ -183,10 +171,10 @@ def main():
             with torch.no_grad():
                 token_output, _ = model(input_seq)
             probabilities = torch.softmax(token_output[:, -1], dim=-1)
-            next_token_idx = torch.multinomial(probabilities, num_samples=1).item()
-            next_token = gpt2_tokenizer.decode([next_token_idx])
-            generated += next_token
-            input_seq = torch.cat((input_seq[:, 1:], torch.tensor([[next_token_idx]], device=device)), dim=1)
+            next_word_idx = torch.multinomial(probabilities, num_samples=1).item()
+            next_word = dataset.idx_to_word[next_word_idx]
+            generated += ' ' + next_word
+            input_seq = torch.cat((input_seq[:, 1:], torch.tensor([[next_word_idx]], device=device)), dim=1)
         
         return generated
 
@@ -200,17 +188,13 @@ def main():
         user_input = input(f"{BLUE}Enter the starting text (or 'exit' to quit): {RESET}")
         if user_input.lower() == 'exit':
             break
-        if len(user_input) > seq_length:
-            user_input = user_input[:seq_length]
-
+        if len(user_input.split()) > seq_length:
+            user_input = ' '.join(user_input.split()[:seq_length])
+        
         # Add two line breaks before the generated text
         print("\n\n")  # Two line breaks
 
-        # Generate text using GPT-2 as the assistant to the AttentionStream model
-        gpt2_generated = generate_gpt2_prompt(gpt2_model, gpt2_tokenizer, user_input, max_length=50)
-        
-        # Use AttentionStream to complete the generated sequence
-        generated_text = generate_text(model, gpt2_generated, length=150)
+        generated_text = generate_text(model, user_input, length=150)
         
         # Print the generated text in green
         print(f"{GREEN}{generated_text}{RESET}")
