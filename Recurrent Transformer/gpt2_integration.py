@@ -1,89 +1,147 @@
-# Step 1: Install required libraries
-# Run this in your terminal:
-# pip install transformers torch datasets
-
-# Step 2: Import necessary libraries
-from transformers import GPT2LMHeadModel, GPT2Tokenizer, AdamW
 import torch
-from torch.utils.data import DataLoader, TensorDataset
-from tqdm import tqdm
-from torch.cuda.amp import autocast, GradScaler
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+from torch.nn.utils.rnn import pad_sequence
+from collections import Counter
+import re
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
-
-# Load GPT-2 model and tokenizer
-model_name = "gpt2-medium"
-gpt2_model = GPT2LMHeadModel.from_pretrained(model_name)
-tokenizer = GPT2Tokenizer.from_pretrained(model_name)
-tokenizer.pad_token = tokenizer.eos_token
-gpt2_model.to(device)
-
-# Read and tokenize data
-with open("train_data.txt", "r") as file:
-    text_data = file.read()
-
-inputs = tokenizer(text_data, return_tensors="pt", max_length=512, truncation=True, padding=True)  # Reduced max_length
-inputs = {key: value.to(device) for key, value in inputs.items()}
-
-# Prepare dataset and dataloader
-dataset = TensorDataset(inputs['input_ids'], inputs['attention_mask'])
-dataloader = DataLoader(dataset, batch_size=1, shuffle=True)  # Reduced batch size
-
-# Optimizer
-optimizer = AdamW(gpt2_model.parameters(), lr=5e-5)
-
-# Mixed precision setup
-scaler = GradScaler()
-
-# Fine-tuning loop with gradient accumulation
-accumulation_steps = 4
-
-for epoch in range(25):  # Increased epochs
-    gpt2_model.train()
-    loop = tqdm(dataloader, desc=f"Epoch {epoch+1}/25")
-
-    for step, batch in enumerate(loop):
-        input_ids, attention_mask = batch
-        optimizer.zero_grad()
-
-        with autocast():
-            outputs = gpt2_model(input_ids, attention_mask=attention_mask, labels=input_ids)
-            loss = outputs.loss
-
-        scaler.scale(loss).backward()
+# Define the dataset
+class HotelPolicyDataset(Dataset):
+    def __init__(self, policies, word2idx):
+        self.policies = policies
+        self.word2idx = word2idx
+        self.tokenized_policies = [self.tokenize(policy) for policy in policies]
     
-        # Update weights every `accumulation_steps`
-        if (step + 1) % accumulation_steps == 0 or (step + 1) == len(loop):
-            scaler.step(optimizer)
-            scaler.update()
+    def tokenize(self, text):
+        words = re.findall(r'\b\w+\b', text.lower())
+        return torch.tensor([self.word2idx[word] for word in words if word in self.word2idx])
+    
+    def __len__(self):
+        return len(self.tokenized_policies)
+    
+    def __getitem__(self, idx):
+        return self.tokenized_policies[idx]
 
-        loop.set_postfix(loss=loss.item())
+# Sample dataset of hotel policies
+policies = [
+    "Check-in is from 3:00 PM to 11:00 PM.",
+    "Check-out is from 7:00 AM to 12:00 PM.",
+    "Guests can cancel free of charge until 24 hours before arrival.",
+    "If the guest does not show up, they will be charged the total price of the reservation.",
+    "Pets are allowed on request. Charges may apply.",
+    "Smoking is not allowed in the rooms or public areas.",
+    "Payment is due upon arrival. We accept credit cards and cash.",
+    "All children are welcome. Children under 2 years stay free of charge in a crib.",
+    "Extra beds are available upon request. Charges may apply.",
+    "WiFi is available in all areas and is free of charge."
+]
 
-# Save the fine-tuned model
-gpt2_model.save_pretrained("fine_tuned_gpt2_medium")
-tokenizer.save_pretrained("fine_tuned_gpt2_medium")
+# Build vocabulary
+all_words = re.findall(r'\b\w+\b', ' '.join(policies).lower())
+vocab = Counter(all_words)
+word2idx = {word: idx for idx, (word, _) in enumerate(vocab.items(), start=1)}
+word2idx['<pad>'] = 0
+idx2word = {idx: word for word, idx in word2idx.items()}
 
-# Load the fine-tuned GPT-2 model
-gpt2_model = GPT2LMHeadModel.from_pretrained("fine_tuned_gpt2_medium")
-tokenizer = GPT2Tokenizer.from_pretrained("fine_tuned_gpt2_medium")
-gpt2_model.to(device)
+# Collate function to pad sequences
+def collate_fn(batch):
+    return pad_sequence(batch, batch_first=True, padding_value=word2idx['<pad>'])
 
-# Infinite loop for user input prompts
-while True:
-    input_text = input("Enter a prompt (or type 'exit' to stop): ")
-    if input_text.lower() == 'exit':
-        print("Exiting...")
-        break
+# Define the LinearTransformer model
+class LinearTransformerLanguageModel(nn.Module):
+    def __init__(self, d_model, vocab_size):
+        super(LinearTransformerLanguageModel, self).__init__()
+        self.d_model = d_model
+        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.WQ = nn.Linear(d_model, d_model)
+        self.WK = nn.Linear(d_model, d_model)
+        self.WV = nn.Linear(d_model, d_model)
+        self.fc_out = nn.Linear(d_model, vocab_size)
+    
+    def feature_map(self, x):
+        return F.elu(x) + 1
 
-    input_ids = tokenizer.encode(input_text, return_tensors='pt').to(device)
+    def forward(self, x):
+        # Convert tokens to embeddings
+        embeddings = self.embedding(x)
+        N, seq_len, d_model = embeddings.shape
 
-    # Generate attention mask
-    attention_mask = input_ids != tokenizer.pad_token_id
+        # Apply linear transformations
+        Q = self.feature_map(self.WQ(embeddings))
+        K = self.feature_map(self.WK(embeddings))
+        V = self.WV(embeddings)
 
-    # Perform generation using GPT-2 with the attention mask
-    output = gpt2_model.generate(input_ids, attention_mask=attention_mask, max_length=100, num_return_sequences=1, no_repeat_ngram_size=2)
+        # Initialize S and output
+        S = torch.zeros(N, d_model, d_model, device=x.device)
+        V_out = torch.zeros_like(Q)
 
-    # Decode and print the generated text
-    generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
-    print(f"Generated text: {generated_text}\n")
+        for i in range(seq_len):
+            S = S + torch.bmm(K[:, i, :].unsqueeze(2), V[:, i, :].unsqueeze(1))
+            V_out[:, i, :] = torch.bmm(Q[:, i, :].unsqueeze(1), S).squeeze(1)
+        
+        logits = self.fc_out(V_out)
+        return logits
+
+# Training loop
+def train(model, dataloader, device, epochs=200, learning_rate=0.0001):
+    model.to(device)
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    criterion = nn.CrossEntropyLoss() 
+
+    for epoch in range(epochs):
+        for batch in dataloader:
+            batch = batch.long().to(device)
+            optimizer.zero_grad()
+            
+            inputs = batch[:, :-1]
+            targets = batch[:, 1:]
+
+            logits = model(inputs)
+            logits = logits.view(-1, logits.size(-1))
+            targets = targets.reshape(-1)
+
+            loss = criterion(logits, targets)
+            loss.backward()
+            optimizer.step()
+        
+        if (epoch + 1) % 10 == 0:
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {loss.item()}")
+
+# Sequence generation function
+def generate_sequence(model, prompt, device, word2idx, idx2word, max_length=50):
+    model.eval()
+    words = re.findall(r'\b\w+\b', prompt.lower())
+    generated = torch.tensor([word2idx[word] for word in words if word in word2idx], device=device).unsqueeze(0)
+
+    with torch.no_grad():
+        for _ in range(max_length - len(words)):
+            logits = model(generated)
+            next_token = torch.argmax(logits[:, -1, :], dim=-1)
+            generated = torch.cat((generated, next_token.unsqueeze(0)), dim=1)
+    
+    generated_words = [idx2word[idx.item()] for idx in generated.squeeze()]
+    return ' '.join(generated_words)
+
+# Main script
+if __name__ == "__main__":
+    # Check if CUDA is available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Create dataset and dataloader
+    dataset = HotelPolicyDataset(policies, word2idx)
+    dataloader = DataLoader(dataset, batch_size=2, shuffle=True, collate_fn=collate_fn)
+
+    # Define vocabulary size (number of unique words)
+    vocab_size = len(word2idx)
+
+    # Instantiate and train the model
+    d_model = 128  # Increase the embedding size for more model capacity
+    model = LinearTransformerLanguageModel(d_model, vocab_size)
+    train(model, dataloader, device)
+
+    # Generate a sequence based on a prompt
+    sample_prompt = "Check-in is from"  # Starting prompt
+    generated_text = generate_sequence(model, sample_prompt, device, word2idx, idx2word)
+    print("Generated sequence:", generated_text)

@@ -109,7 +109,7 @@ class AttentionStream(nn.Module):
 def main():
     seq_length = 512  # Adjusted for question-answer pairs
     batch_size = 16    # Adjusted batch size for smaller dataset
-    num_epochs = 5   # Increased for better training
+    num_epochs = 15   # Increased for better training
     learning_rate = 0.0001
     model_file = 'attention_stream_model.pth'
 
@@ -146,6 +146,7 @@ def main():
 
                 # Compute loss for both token generation and classification
                 token_loss = criterion(token_output.view(-1, dataset.vocab_size), y_batch.view(-1))
+                
                 # Assuming you have labels for classification (e.g., stored in 'class_labels')
                 class_labels = torch.zeros(x_batch.size(0), dtype=torch.long).to(device)  # Example, replace with actual labels
                 class_loss = criterion(class_output, class_labels)
