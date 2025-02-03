@@ -5,23 +5,16 @@ from torch.utils.data import Dataset, DataLoader, random_split
 import torch.nn as nn
 import torch.optim as optim
 
-# Updated TextDataset to work at word-level
 class TextDataset(Dataset):
     def __init__(self, text, seq_length):
         self.text = text
         self.seq_length = seq_length
-        
-        # Tokenizing text into words
-        self.words = text.split()  # Simple whitespace split
-        self.vocab = sorted(set(self.words))  # Create a vocabulary of unique words
+        self.vocab = sorted(set(text))
         self.vocab_size = len(self.vocab)
+        self.char_to_idx = {char: idx for idx, char in enumerate(self.vocab)}
+        self.idx_to_char = {idx: char for char, idx in self.char_to_idx.items()}
         
-        # Word to index and index to word mappings
-        self.word_to_idx = {word: idx for idx, word in enumerate(self.vocab)}
-        self.idx_to_word = {idx: word for word, idx in self.word_to_idx.items()}
-        
-        # Convert text into a sequence of word indices
-        self.data = torch.tensor([self.word_to_idx[word] for word in self.words], dtype=torch.long)
+        self.data = torch.tensor([self.char_to_idx[char] for char in text], dtype=torch.long)
         
     def __len__(self):
         return len(self.data) - self.seq_length
@@ -37,6 +30,10 @@ def load_text_data(folder_path):
     with open(file_path, 'r', encoding='utf-8') as file:
         text = file.read()
     return text
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 class AttentionStream(nn.Module):
     def __init__(self, vocab_size, embedding_dim=256, hidden_dim=256, num_layers=8, dropout=0.2, num_classes=16):
@@ -108,8 +105,8 @@ class AttentionStream(nn.Module):
 
 def main():
     seq_length = 512  # Adjusted for question-answer pairs
-    batch_size = 16    # Adjusted batch size for smaller dataset
-    num_epochs = 15   # Increased for better training
+    batch_size = 4    # Adjusted batch size for smaller dataset
+    num_epochs = 10   # Increased for better training
     learning_rate = 0.0001
     model_file = 'attention_stream_model.pth'
 
@@ -146,7 +143,6 @@ def main():
 
                 # Compute loss for both token generation and classification
                 token_loss = criterion(token_output.view(-1, dataset.vocab_size), y_batch.view(-1))
-                
                 # Assuming you have labels for classification (e.g., stored in 'class_labels')
                 class_labels = torch.zeros(x_batch.size(0), dtype=torch.long).to(device)  # Example, replace with actual labels
                 class_loss = criterion(class_output, class_labels)
@@ -164,7 +160,7 @@ def main():
 
     def generate_text(model, start_text, length=150):
         model.eval()
-        input_text = [dataset.word_to_idx.get(word, 0) for word in start_text.split()]
+        input_text = [dataset.char_to_idx.get(char, 0) for char in start_text]
         input_seq = torch.tensor(input_text, dtype=torch.long).unsqueeze(0).to(device)
         generated = start_text
         
@@ -172,10 +168,10 @@ def main():
             with torch.no_grad():
                 token_output, _ = model(input_seq)
             probabilities = torch.softmax(token_output[:, -1], dim=-1)
-            next_word_idx = torch.multinomial(probabilities, num_samples=1).item()
-            next_word = dataset.idx_to_word[next_word_idx]
-            generated += ' ' + next_word
-            input_seq = torch.cat((input_seq[:, 1:], torch.tensor([[next_word_idx]], device=device)), dim=1)
+            next_char_idx = torch.multinomial(probabilities, num_samples=1).item()
+            next_char = dataset.idx_to_char[next_char_idx]
+            generated += next_char
+            input_seq = torch.cat((input_seq[:, 1:], torch.tensor([[next_char_idx]], device=device)), dim=1)
         
         return generated
 
@@ -189,8 +185,8 @@ def main():
         user_input = input(f"{BLUE}Enter the starting text (or 'exit' to quit): {RESET}")
         if user_input.lower() == 'exit':
             break
-        if len(user_input.split()) > seq_length:
-            user_input = ' '.join(user_input.split()[:seq_length])
+        if len(user_input) > seq_length:
+            user_input = user_input[:seq_length]
         
         # Add two line breaks before the generated text
         print("\n\n")  # Two line breaks
@@ -199,6 +195,7 @@ def main():
         
         # Print the generated text in green
         print(f"{GREEN}{generated_text}{RESET}")
+
 
 
 if __name__ == '__main__':

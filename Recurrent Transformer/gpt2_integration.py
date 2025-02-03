@@ -6,6 +6,13 @@ import torch.nn as nn
 import torch.optim as optim
 from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
+# Define the end token
+END_TOKEN = "<|endoftext|>"  # Define the special end token
+# Define color codes
+BLUE = '\033[94m'  # Blue color for user input
+GREEN = '\033[92m'  # Green color for generated text
+RESET = '\033[0m'  # Reset to default color
+
 # Adjustments: Loading GPT-2 model and tokenizer
 class HybridModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim=256, hidden_dim=256, num_layers=8, dropout=0.2, num_classes=16):
@@ -88,8 +95,11 @@ class TextDataset(Dataset):
         self.text = text
         self.seq_length = seq_length
         self.tokenizer = tokenizer
-        self.vocab_size = len(tokenizer)  # The vocab size comes from the GPT-2 tokenizer
-        self.tokenized_data = tokenizer.encode(text)  # Tokenize the entire dataset
+        self.vocab_size = len(tokenizer)
+        
+        # Append the end token to the end of the text (optional, for fine-tuning purposes)
+        self.text_with_end_token = text + " " + END_TOKEN
+        self.tokenized_data = tokenizer.encode(self.text_with_end_token)
 
     def __len__(self):
         return len(self.tokenized_data) - self.seq_length
@@ -103,29 +113,69 @@ class TextDataset(Dataset):
 # Initialize GPT-2 model and tokenizer
 def load_gpt2_model():
     tokenizer = GPT2Tokenizer.from_pretrained("gpt2")
+    
+    # Add the special end token to the tokenizer
+    tokenizer.add_special_tokens({'additional_special_tokens': [END_TOKEN]})
+    
     model = GPT2LMHeadModel.from_pretrained("gpt2")
     model.eval()
+    
+    # Resize token embeddings to include the new end token
+    model.resize_token_embeddings(len(tokenizer))
+    
     return model, tokenizer
 
 
 def generate_gpt2_prompt(model, tokenizer, prompt_text, max_length=100):
     input_ids = tokenizer.encode(prompt_text, return_tensors="pt")
+    input_ids = input_ids[:, :1024]  # Ensure the input sequence doesn't exceed 1024 tokens
+    
+    # Set do_sample=True to allow temperature sampling
     with torch.no_grad():
-        output = model.generate(input_ids, max_length=max_length, num_return_sequences=1, no_repeat_ngram_size=2, temperature=0.7)
+        output = model.generate(input_ids, max_length=max_length, num_return_sequences=1, 
+                                do_sample=True, temperature=0.7, no_repeat_ngram_size=2, 
+                                eos_token_id=tokenizer.encode(END_TOKEN)[0])
     generated_text = tokenizer.decode(output[0], skip_special_tokens=True)
     return generated_text
+
+
+
+def generate_text(model, start_text, tokenizer, device, length=150):
+    model.eval()
+    input_text = tokenizer.encode(start_text)
+    input_seq = torch.tensor(input_text, dtype=torch.long).unsqueeze(0).to(device)  # Move tensor to device
+    generated = start_text
+    
+    for _ in range(length):
+        with torch.no_grad():
+            token_output, _ = model(input_seq)
+        probabilities = torch.softmax(token_output[:, -1], dim=-1)
+        next_token_idx = torch.multinomial(probabilities, num_samples=1).item()
+        
+        next_token = tokenizer.decode([next_token_idx])
+        
+        # If the next token is the end token, stop the generation
+        if next_token == END_TOKEN:
+            break
+        
+        generated += next_token
+        input_seq = torch.cat((input_seq[:, 1:], torch.tensor([[next_token_idx]], device=device)), dim=1)
+    
+    return generated
+
+
 
 
 def main():
     seq_length = 512  # Adjusted for question-answer pairs
     batch_size = 4    # Adjusted batch size for smaller dataset
-    num_epochs = 10   # Increased for better training
+    num_epochs = 5   # Increased for better training
     learning_rate = 0.0001
     model_file = 'hybrid_attention_stream_model.pth'
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    # Load GPT-2 tokenizer
+    # Load GPT-2 tokenizer and model
     gpt2_model, gpt2_tokenizer = load_gpt2_model()
 
     text_data = load_text_data('text-data')
@@ -173,28 +223,6 @@ def main():
         # Save the model
         torch.save(model.state_dict(), model_file)
 
-    def generate_text(model, start_text, length=150):
-        model.eval()
-        input_text = gpt2_tokenizer.encode(start_text)
-        input_seq = torch.tensor(input_text, dtype=torch.long).unsqueeze(0).to(device)
-        generated = start_text
-        
-        for _ in range(length):
-            with torch.no_grad():
-                token_output, _ = model(input_seq)
-            probabilities = torch.softmax(token_output[:, -1], dim=-1)
-            next_token_idx = torch.multinomial(probabilities, num_samples=1).item()
-            next_token = gpt2_tokenizer.decode([next_token_idx])
-            generated += next_token
-            input_seq = torch.cat((input_seq[:, 1:], torch.tensor([[next_token_idx]], device=device)), dim=1)
-        
-        return generated
-
-    # Define color codes
-    BLUE = '\033[94m'  # Blue color for user input
-    GREEN = '\033[92m'  # Green color for generated text
-    RESET = '\033[0m'  # Reset to default color
-
     # User input for generating text
     while True:
         user_input = input(f"{BLUE}Enter the starting text (or 'exit' to quit): {RESET}")
@@ -203,16 +231,14 @@ def main():
         if len(user_input) > seq_length:
             user_input = user_input[:seq_length]
 
-        # Add two line breaks before the generated text
-        print("\n\n")  # Two line breaks
+        print("\n\n")
 
         # Generate text using GPT-2 as the assistant to the AttentionStream model
         gpt2_generated = generate_gpt2_prompt(gpt2_model, gpt2_tokenizer, user_input, max_length=50)
         
         # Use AttentionStream to complete the generated sequence
-        generated_text = generate_text(model, gpt2_generated, length=150)
+        generated_text = generate_text(model, gpt2_generated, gpt2_tokenizer, device, length=150)
         
-        # Print the generated text in green
         print(f"{GREEN}{generated_text}{RESET}")
 
 
