@@ -37,17 +37,26 @@ y = torch.tensor(y, dtype=torch.long)
 dataset = TensorDataset(X, y)
 dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
-# Define the RNN-based model
+# Define the RNN-based model with weight decay mechanism
 class RNNModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers=1):
         super(RNNModel, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
         self.rnn = nn.RNN(embedding_dim, hidden_dim, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_dim, vocab_size)
+        self.decay_net = nn.Linear(embedding_dim, 1)  # Network to compute decay rate
 
     def forward(self, x):
         embedded = self.embeddings(x)  # Shape: [batch_size, seq_length, embedding_dim]
-        rnn_out, _ = self.rnn(embedded)  # RNN outputs (output, hidden)
+        
+        # Compute decay rates
+        decay_rates = torch.sigmoid(self.decay_net(embedded))  # Shape: [batch_size, seq_length, 1]
+        
+        # Apply decay to embeddings
+        decay_factors = torch.cumprod(1 - decay_rates, dim=1)  # Shape: [batch_size, seq_length, 1]
+        decayed_embeddings = embedded * decay_factors  # Shape: [batch_size, seq_length, embedding_dim]
+        
+        rnn_out, _ = self.rnn(decayed_embeddings)  # RNN outputs (output, hidden)
         out = self.fc(rnn_out[:, -1, :])  # Take the output of the last RNN timestep
         return out
 
@@ -68,7 +77,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 # Check if a saved model exists
 model_path = 'rnn_model.pth'
 if os.path.exists(model_path):
-    model.load_state_dict(torch.load(model_path))
+    state_dict = torch.load(model_path, map_location=device)
+    model.load_state_dict(state_dict)
     print("Loaded saved model.")
 else:
     # Training the model
