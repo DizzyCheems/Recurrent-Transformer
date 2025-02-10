@@ -42,13 +42,16 @@ class TimeMix(nn.Module):
         super(TimeMix, self).__init__()
         self.embedding_dim = embedding_dim
         self.decay_net = nn.Linear(embedding_dim, 1)
-    
+        self.layer_norm = nn.LayerNorm(embedding_dim)  # Layer Normalization
+
     def forward(self, K, V, W):
         T = K.size(1)
         exp_k = torch.exp(K - (T - torch.arange(T, device=K.device).unsqueeze(0).unsqueeze(2)) * W)
         numerator = torch.sum(exp_k * V, dim=1)
         denominator = torch.sum(exp_k, dim=1)
-        return numerator / denominator
+        result = numerator / denominator
+        return self.layer_norm(result)  # Apply Layer Normalization
+
 
 class TimeMixSeq(nn.Module):
     def __init__(self, embedding_dim):
@@ -57,12 +60,15 @@ class TimeMixSeq(nn.Module):
         self.decay_net = nn.Linear(embedding_dim, 1)
         self.register_buffer('a', torch.zeros(1))
         self.register_buffer('b', torch.zeros(1))
+        self.layer_norm = nn.LayerNorm(embedding_dim)  # Layer Normalization
     
     def forward(self, k, v, w):
         a = torch.exp(w) * self.a + torch.exp(k)
         b = torch.exp(w) * self.b + torch.exp(k) * v
         self.a, self.b = a, b
-        return b / a
+        result = b / a
+        return self.layer_norm(result)  # Apply Layer Normalization
+
 
 class ChannelMix(nn.Module):
     def __init__(self, input_dim):
@@ -72,9 +78,11 @@ class ChannelMix(nn.Module):
         self.Wv = nn.Linear(input_dim, input_dim)
         self.sigmoid = nn.Sigmoid()
         self.relu2 = lambda x: torch.relu(x) ** 2
+        self.layer_norm = nn.LayerNorm(input_dim)  # Layer Normalization
 
     def forward(self, x):
-        return self.sigmoid(self.Wr(x)) * (self.Wv(self.relu2(self.Wk(x))))
+        result = self.sigmoid(self.Wr(x)) * (self.Wv(self.relu2(self.Wk(x))))
+        return self.layer_norm(result)  # Apply Layer Normalization
 
 class Shift(nn.Module):
     def __init__(self, input_dim):
@@ -106,7 +114,6 @@ class RWKVBlock(nn.Module):
 
         # Now that both tensors have the same shape, we can safely add them
         return shifted_input + channel_mix_out
-
 
 class RWKVModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers=1):
