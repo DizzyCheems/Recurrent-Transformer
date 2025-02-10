@@ -37,34 +37,98 @@ y = torch.tensor(y, dtype=torch.long)
 dataset = TensorDataset(X, y)
 dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
 
-# Define the RNN-based model with weight decay mechanism
-class RNNModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers=1):
-        super(RNNModel, self).__init__()
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.rnn = nn.RNN(embedding_dim, hidden_dim, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, vocab_size)
-        self.decay_net = nn.Linear(embedding_dim, 1)  # Network to compute decay rate
+class TimeMix(nn.Module):
+    def __init__(self, embedding_dim):
+        super(TimeMix, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.decay_net = nn.Linear(embedding_dim, 1)
+    
+    def forward(self, K, V, W):
+        T = K.size(1)
+        exp_k = torch.exp(K - (T - torch.arange(T, device=K.device).unsqueeze(0).unsqueeze(2)) * W)
+        numerator = torch.sum(exp_k * V, dim=1)
+        denominator = torch.sum(exp_k, dim=1)
+        return numerator / denominator
+
+class TimeMixSeq(nn.Module):
+    def __init__(self, embedding_dim):
+        super(TimeMixSeq, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.decay_net = nn.Linear(embedding_dim, 1)
+        self.register_buffer('a', torch.zeros(1))
+        self.register_buffer('b', torch.zeros(1))
+    
+    def forward(self, k, v, w):
+        a = torch.exp(w) * self.a + torch.exp(k)
+        b = torch.exp(w) * self.b + torch.exp(k) * v
+        self.a, self.b = a, b
+        return b / a
+
+class ChannelMix(nn.Module):
+    def __init__(self, input_dim):
+        super(ChannelMix, self).__init__()
+        self.Wr = nn.Linear(input_dim, input_dim)
+        self.Wk = nn.Linear(input_dim, input_dim)
+        self.Wv = nn.Linear(input_dim, input_dim)
+        self.sigmoid = nn.Sigmoid()
+        self.relu2 = lambda x: torch.relu(x) ** 2
 
     def forward(self, x):
-        embedded = self.embeddings(x)  # Shape: [batch_size, seq_length, embedding_dim]
-        
-        # Compute decay rates
-        decay_rates = torch.sigmoid(self.decay_net(embedded))  # Shape: [batch_size, seq_length, 1]
-        
-        # Apply decay to embeddings
-        decay_factors = torch.cumprod(1 - decay_rates, dim=1)  # Shape: [batch_size, seq_length, 1]
-        decayed_embeddings = embedded * decay_factors  # Shape: [batch_size, seq_length, embedding_dim]
-        
-        rnn_out, _ = self.rnn(decayed_embeddings)  # RNN outputs (output, hidden)
-        out = self.fc(rnn_out[:, -1, :])  # Take the output of the last RNN timestep
+        return self.sigmoid(self.Wr(x)) * (self.Wv(self.relu2(self.Wk(x))))
+
+class Shift(nn.Module):
+    def __init__(self, input_dim):
+        super(Shift, self).__init__()
+        self.mu = nn.Parameter(torch.tensor(0.5))
+
+    def forward(self, x, x_prev):
+        if x_prev is None:
+            return x
+        return self.mu * x + (1 - self.mu) * x_prev
+
+class RWKVBlock(nn.Module):
+    def __init__(self, input_dim):
+        super(RWKVBlock, self).__init__()
+        self.shift = Shift(input_dim)
+        self.time_mix = TimeMix(input_dim)
+        self.channel_mix = ChannelMix(input_dim)
+
+    def forward(self, x, x_prev):
+        shifted_input = self.shift(x, x_prev)
+        time_mix_out = self.time_mix(shifted_input, shifted_input, shifted_input)
+        channel_mix_out = self.channel_mix(time_mix_out)
+
+        # Ensure channel_mix_out has the same sequence length as shifted_input
+        # Reshape channel_mix_out to match shifted_input's shape
+        if channel_mix_out.size(1) != shifted_input.size(1):
+            # Add an extra dimension for the sequence length (broadcast over seq_length)
+            channel_mix_out = channel_mix_out.unsqueeze(1).expand(-1, shifted_input.size(1), -1)
+
+        # Now that both tensors have the same shape, we can safely add them
+        return shifted_input + channel_mix_out
+
+
+class RWKVModel(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers=1):
+        super(RWKVModel, self).__init__()
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.rwkv_blocks = nn.ModuleList([RWKVBlock(embedding_dim) for _ in range(num_layers)])
+        self.fc = nn.Linear(embedding_dim, vocab_size)
+
+    def forward(self, x):
+        embedded = self.embeddings(x)
+        x_prev = None
+        for rwkv_block in self.rwkv_blocks:
+            embedded = rwkv_block(embedded, x_prev)
+            x_prev = embedded
+        out = self.fc(embedded[:, -1, :])  # Output of the last timestep
         return out
 
 # Hyperparameters
 embedding_dim = 50
 hidden_dim = 128
 vocab_size = len(word_to_index) + 1  # Add 1 for padding
-model = RNNModel(vocab_size, embedding_dim, hidden_dim)
+model = RWKVModel(vocab_size, embedding_dim, hidden_dim)
 
 # Move the model to GPU if available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -75,7 +139,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Check if a saved model exists
-model_path = 'rnn_model.pth'
+model_path = 'rwkv_model.pth'
 if os.path.exists(model_path):
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
