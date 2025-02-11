@@ -35,44 +35,44 @@ y = torch.tensor(y, dtype=torch.long)
 
 # Prepare DataLoader
 dataset = TensorDataset(X, y)
-dataloader = DataLoader(dataset, batch_size=64, shuffle=True)
+dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
 
-class TimeMix(nn.Module):
+class SequenceMerging(nn.Module):
     def __init__(self, embedding_dim):
-        super(TimeMix, self).__init__()
+        super(SequenceMerging, self).__init__()
         self.embedding_dim = embedding_dim
         self.decay_net = nn.Linear(embedding_dim, 1)
         self.layer_norm = nn.LayerNorm(embedding_dim)  # Layer Normalization
 
-    def forward(self, K, V, W):
-        T = K.size(1)
-        exp_k = torch.exp(K - (T - torch.arange(T, device=K.device).unsqueeze(0).unsqueeze(2)) * W)
+    def forward(self, C, V, W):
+        T = C.size(1)
+        exp_k = torch.exp(C - (T - torch.arange(T, device=C.device).unsqueeze(0).unsqueeze(2)) * W)
         numerator = torch.sum(exp_k * V, dim=1)
         denominator = torch.sum(exp_k, dim=1)
         result = numerator / denominator
         return self.layer_norm(result)  # Apply Layer Normalization
 
 
-class TimeMixSeq(nn.Module):
+class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
-        super(TimeMixSeq, self).__init__()
+        super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
         self.decay_net = nn.Linear(embedding_dim, 1)
         self.register_buffer('a', torch.zeros(1))
         self.register_buffer('b', torch.zeros(1))
         self.layer_norm = nn.LayerNorm(embedding_dim)  # Layer Normalization
     
-    def forward(self, k, v, w):
-        a = torch.exp(w) * self.a + torch.exp(k)
-        b = torch.exp(w) * self.b + torch.exp(k) * v
+    def forward(self, C, V, W):
+        a = torch.exp(W) * self.a + torch.exp(C)
+        b = torch.exp(W) * self.b + torch.exp(C) * V
         self.a, self.b = a, b
         result = b / a
         return self.layer_norm(result)  # Apply Layer Normalization
 
 
-class ChannelMix(nn.Module):
+class StateCoupling(nn.Module):
     def __init__(self, input_dim):
-        super(ChannelMix, self).__init__()
+        super(StateCoupling, self).__init__()
         self.Wr = nn.Linear(input_dim, input_dim)
         self.Wk = nn.Linear(input_dim, input_dim)
         self.Wv = nn.Linear(input_dim, input_dim)
@@ -94,39 +94,39 @@ class Shift(nn.Module):
             return x
         return self.mu * x + (1 - self.mu) * x_prev
 
-class RWKVBlock(nn.Module):
+class AttentionStreamBlock(nn.Module):
     def __init__(self, input_dim):
-        super(RWKVBlock, self).__init__()
+        super(AttentionStreamBlock, self).__init__()
         self.shift = Shift(input_dim)
-        self.time_mix = TimeMix(input_dim)
-        self.channel_mix = ChannelMix(input_dim)
+        self.sequence_merging = SequenceMerging(input_dim)
+        self.state_coupling = StateCoupling(input_dim)
 
     def forward(self, x, x_prev):
         shifted_input = self.shift(x, x_prev)
-        time_mix_out = self.time_mix(shifted_input, shifted_input, shifted_input)
-        channel_mix_out = self.channel_mix(time_mix_out)
+        sequence_merging_out = self.sequence_merging(shifted_input, shifted_input, shifted_input)
+        state_coupling_out = self.state_coupling(sequence_merging_out)
 
-        # Ensure channel_mix_out has the same sequence length as shifted_input
-        # Reshape channel_mix_out to match shifted_input's shape
-        if channel_mix_out.size(1) != shifted_input.size(1):
+        # Ensure state_coupling_out has the same sequence length as shifted_input
+        # Reshape state_coupling_out to match shifted_input's shape
+        if state_coupling_out.size(1) != shifted_input.size(1):
             # Add an extra dimension for the sequence length (broadcast over seq_length)
-            channel_mix_out = channel_mix_out.unsqueeze(1).expand(-1, shifted_input.size(1), -1)
+            state_coupling_out = state_coupling_out.unsqueeze(1).expand(-1, shifted_input.size(1), -1)
 
         # Now that both tensors have the same shape, we can safely add them
-        return shifted_input + channel_mix_out
+        return shifted_input + state_coupling_out
 
-class RWKVModel(nn.Module):
+class AttentionStreamModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers=1):
-        super(RWKVModel, self).__init__()
+        super(AttentionStreamModel, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.rwkv_blocks = nn.ModuleList([RWKVBlock(embedding_dim) for _ in range(num_layers)])
+        self.attention_stream_blocks = nn.ModuleList([AttentionStreamBlock(embedding_dim) for _ in range(num_layers)])
         self.fc = nn.Linear(embedding_dim, vocab_size)
 
     def forward(self, x):
         embedded = self.embeddings(x)
         x_prev = None
-        for rwkv_block in self.rwkv_blocks:
-            embedded = rwkv_block(embedded, x_prev)
+        for attention_stream_block in self.attention_stream_blocks:
+            embedded = attention_stream_block(embedded, x_prev)
             x_prev = embedded
         out = self.fc(embedded[:, -1, :])  # Output of the last timestep
         return out
@@ -135,7 +135,7 @@ class RWKVModel(nn.Module):
 embedding_dim = 50
 hidden_dim = 128
 vocab_size = len(word_to_index) + 1  # Add 1 for padding
-model = RWKVModel(vocab_size, embedding_dim, hidden_dim)
+model = AttentionStreamModel(vocab_size, embedding_dim, hidden_dim)
 
 # Move the model to GPU if available
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -146,7 +146,7 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Check if a saved model exists
-model_path = 'rwkv_model.pth'
+model_path = 'attention_stream_model.pth'
 if os.path.exists(model_path):
     state_dict = torch.load(model_path, map_location=device)
     model.load_state_dict(state_dict)
@@ -183,7 +183,7 @@ def predict_next_word(sequence, word_to_index, index_to_word, model):
 
 # Number of words to predict
 num_predictions = 20
-
+    
 # Interactive loop for generating sequences
 print("\033[94mModel is ready! Type a sequence of words, and the model will predict the next word.\033[0m")
 print("\033[94mType 'exit' to stop.\033[0m")
