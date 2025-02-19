@@ -12,24 +12,24 @@ with open('data.txt', 'r', encoding='utf-8') as file:
 # Tokenization and creating a word-to-index mapping
 words = data.split()
 word_counts = Counter(words)
-word_to_index = {word: i+1 for i, (word, _) in enumerate(word_counts.items())}  # Start indexing from 1
+word_to_index = {word: i+1 for i, (word, _) in enumerate(word_counts.items())}
 index_to_word = {i: word for word, i in word_to_index.items()}
 
 # Encode words as indices
 encoded_data = [word_to_index[word] for word in words]
 
 # Prepare input-output pairs (context, next word)
-seq_length = 5  # Define the length of the context
+seq_length = 5
 X = []
 y = []
 for i in range(len(encoded_data) - seq_length):
-    X.append(encoded_data[i:i+seq_length])  # Context (previous words)
-    y.append(encoded_data[i+seq_length])   # Next word (target)
+    X.append(encoded_data[i:i+seq_length])
+    y.append(encoded_data[i+seq_length])
 
 X = np.array(X)
 y = np.array(y)
 
-# Convert X and y to torch tensors
+# Convert to tensors
 X = torch.tensor(X, dtype=torch.long)
 y = torch.tensor(y, dtype=torch.long)
 
@@ -37,52 +37,49 @@ y = torch.tensor(y, dtype=torch.long)
 dataset = TensorDataset(X, y)
 dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
 
-class SequenceMerging(nn.Module):
-    def __init__(self, embedding_dim):
-        super(SequenceMerging, self).__init__()
-        self.embedding_dim = embedding_dim
-        self.decay_net = nn.Linear(embedding_dim, 1)
-        self.layer_norm = nn.LayerNorm(embedding_dim)  # Layer Normalization
-
-    def forward(self, C, V, W):
-        T = C.size(1)
-        exp_k = torch.exp(C - (T - torch.arange(T, device=C.device).unsqueeze(0).unsqueeze(2)) * W)
-        numerator = torch.sum(exp_k * V, dim=1)
-        denominator = torch.sum(exp_k, dim=1)
-        result = numerator / denominator
-        return self.layer_norm(result)  # Apply Layer Normalization
-
-
 class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
-        self.decay_net = nn.Linear(embedding_dim, 1)
-        self.register_buffer('a', torch.zeros(1))
-        self.register_buffer('b', torch.zeros(1))
-        self.layer_norm = nn.LayerNorm(embedding_dim)  # Layer Normalization
-    
-    def forward(self, C, V, W):
-        a = torch.exp(W) * self.a + torch.exp(C)
-        b = torch.exp(W) * self.b + torch.exp(C) * V
-        self.a, self.b = a, b
-        result = b / a
-        return self.layer_norm(result)  # Apply Layer Normalization
+            self.decay_net = nn.Linear(embedding_dim, 1)  # Was missing closing )
+            self.layer_norm = nn.LayerNorm(embedding_dim)  # Was on same line without separator
 
+    def forward(self, C, V, W):
+        batch_size, seq_len, _ = C.shape
+        
+        # Initialize a and b for each sequence in the batch
+        a = torch.zeros(batch_size, 1, device=C.device)
+        b = torch.zeros(batch_size, self.embedding_dim, device=C.device)
+        
+        outputs = []
+        for t in range(seq_len):
+            C_t = C[:, t, :]
+            V_t = V[:, t, :]
+            W_t = W[:, t, :]
+            
+            # Update a and b incrementally
+            decay = torch.sigmoid(self.decay_net(W_t))
+            a = decay * a + torch.exp(C_t).sum(dim=1, keepdim=True)
+            b = decay * b + (torch.exp(C_t) * V_t)
+            
+            output_t = b / (a + 1e-8)
+            outputs.append(output_t.unsqueeze(1))
+        
+        result = torch.cat(outputs, dim=1)
+        return self.layer_norm(result)
 
 class StateCoupling(nn.Module):
     def __init__(self, input_dim):
         super(StateCoupling, self).__init__()
         self.Wr = nn.Linear(input_dim, input_dim)
-        self.Wk = nn.Linear(input_dim, input_dim)
         self.Wv = nn.Linear(input_dim, input_dim)
         self.sigmoid = nn.Sigmoid()
-        self.relu2 = lambda x: torch.relu(x) ** 2
-        self.layer_norm = nn.LayerNorm(input_dim)  # Layer Normalization
+        self.layer_norm = nn.LayerNorm(input_dim)
 
     def forward(self, x):
-        result = self.sigmoid(self.Wr(x)) * (self.Wv(self.relu2(self.Wk(x))))
-        return self.layer_norm(result)  # Apply Layer Normalization
+        gate = self.sigmoid(self.Wr(x))
+        value = self.Wv(x)
+        return self.layer_norm(gate * value)
 
 class Shift(nn.Module):
     def __init__(self, input_dim):
@@ -95,109 +92,90 @@ class Shift(nn.Module):
         return self.mu * x + (1 - self.mu) * x_prev
 
 class AttentionStreamBlock(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self, embedding_dim):
         super(AttentionStreamBlock, self).__init__()
-        self.shift = Shift(input_dim)
-        self.sequence_merging = SequenceMerging(input_dim)
-        self.state_coupling = StateCoupling(input_dim)
+        self.shift = Shift(embedding_dim)
+        self.sequence_merging = SequenceMergingSeq(embedding_dim)
+        self.state_coupling = StateCoupling(embedding_dim)
 
     def forward(self, x, x_prev):
-        shifted_input = self.shift(x, x_prev)
-        sequence_merging_out = self.sequence_merging(shifted_input, shifted_input, shifted_input)
-        state_coupling_out = self.state_coupling(sequence_merging_out)
-
-        # Ensure state_coupling_out has the same sequence length as shifted_input
-        # Reshape state_coupling_out to match shifted_input's shape
-        if state_coupling_out.size(1) != shifted_input.size(1):
-            # Add an extra dimension for the sequence length (broadcast over seq_length)
-            state_coupling_out = state_coupling_out.unsqueeze(1).expand(-1, shifted_input.size(1), -1)
-
-        # Now that both tensors have the same shape, we can safely add them
-        return shifted_input + state_coupling_out
+        shifted = self.shift(x, x_prev)
+        merged = self.sequence_merging(shifted, shifted, shifted)
+        coupled = self.state_coupling(merged)
+        return shifted + coupled  # Residual connection
 
 class AttentionStreamModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, hidden_dim, num_layers=1):
+    def __init__(self, vocab_size, embedding_dim, num_layers=1):
         super(AttentionStreamModel, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.attention_stream_blocks = nn.ModuleList([AttentionStreamBlock(embedding_dim) for _ in range(num_layers)])
+        self.blocks = nn.ModuleList([
+            AttentionStreamBlock(embedding_dim)
+            for _ in range(num_layers)
+        ])
         self.fc = nn.Linear(embedding_dim, vocab_size)
 
     def forward(self, x):
-        embedded = self.embeddings(x)
-        x_prev = None
-        for attention_stream_block in self.attention_stream_blocks:
-            embedded = attention_stream_block(embedded, x_prev)
-            x_prev = embedded
-        out = self.fc(embedded[:, -1, :])  # Output of the last timestep
-        return out
+        x = self.embeddings(x)
+        for block in self.blocks:
+            x = block(x, None)  # x_prev handled internally
+        return self.fc(x[:, -1, :])  # Last token output
 
 # Hyperparameters
 embedding_dim = 50
-hidden_dim = 128
-vocab_size = len(word_to_index) + 1  # Add 1 for padding
-model = AttentionStreamModel(vocab_size, embedding_dim, hidden_dim)
+vocab_size = len(word_to_index) + 1
+model = AttentionStreamModel(vocab_size, embedding_dim)
 
-# Move the model to GPU if available
+# Device setup
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
-# Loss and optimizer
+# Training setup
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-# Check if a saved model exists
+# Model loading/saving
 model_path = 'attention_stream_model.pth'
 if os.path.exists(model_path):
-    state_dict = torch.load(model_path, map_location=device)
-    model.load_state_dict(state_dict)
+    model.load_state_dict(torch.load(model_path, map_location=device))
     print("Loaded saved model.")
 else:
-    # Training the model
+    # Training loop
     epochs = 55
     for epoch in range(epochs):
         total_loss = 0
         for batch_X, batch_y in dataloader:
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)  # Move data to GPU if available
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
-            output = model(batch_X)  # Forward pass
-            loss = criterion(output, batch_y)  # Calculate loss
-            loss.backward()  # Backpropagation
-            optimizer.step()  # Update weights
+            outputs = model(batch_X)
+            loss = criterion(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
             total_loss += loss.item()
-
+        
         print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader)}')
-
-    # Save the trained model
+    
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
 
-# Function to predict the next word
+# Prediction function
 def predict_next_word(sequence, word_to_index, index_to_word, model):
     model.eval()
     sequence = [word_to_index.get(word, 0) for word in sequence.split()]
-    sequence = torch.tensor(sequence, dtype=torch.long).unsqueeze(0).to(device)  # Add batch dimension and move to GPU if available
+    sequence = torch.tensor(sequence, dtype=torch.long).unsqueeze(0).to(device)
     with torch.no_grad():
         output = model(sequence)
-        predicted_index = torch.argmax(output, dim=1).item()  # Get the word index with highest probability
-    return index_to_word[predicted_index]
+        return index_to_word[torch.argmax(output).item()]
 
-# Number of words to predict
-num_predictions = 20
-    
-# Interactive loop for generating sequences
-print("\033[94mModel is ready! Type a sequence of words, and the model will predict the next word.\033[0m")
-print("\033[94mType 'exit' to stop.\033[0m")
-
+# Interactive generation
+print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
-    input_sequence = input("\033[94mEnter a sequence: \033[0m")
-    if input_sequence.lower() == "exit":
+    input_seq = input("\033[94mInput: \033[0m")
+    if input_seq.lower() == "exit":
         break
     
-    generated_sequence = input_sequence.split()
+    generated = input_seq.split()
+    for _ in range(20):
+        context = ' '.join(generated[-seq_length:])
+        generated.append(predict_next_word(context, word_to_index, index_to_word, model))
     
-    for _ in range(num_predictions):
-        next_word = predict_next_word(' '.join(generated_sequence[-seq_length:]), word_to_index, index_to_word, model)
-        generated_sequence.append(next_word)
-    
-    generated_text = ' '.join(generated_sequence[len(input_sequence.split()):])
-    print(f"  \033[92mGenerated sequence: {generated_text}\033[0m\n")
+    print(f"\033[92mGenerated: {' '.join(generated[len(input_seq.split()):])}\033[0m\n")
