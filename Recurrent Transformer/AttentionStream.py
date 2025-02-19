@@ -4,6 +4,7 @@ import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from collections import Counter
 import os
+from sklearn.model_selection import train_test_split
 
 # Load the data
 with open('data.txt', 'r', encoding='utf-8') as file:
@@ -29,20 +30,30 @@ for i in range(len(encoded_data) - seq_length):
 X = np.array(X)
 y = np.array(y)
 
-# Convert to tensors
+# Convert to tensors and split data
 X = torch.tensor(X, dtype=torch.long)
 y = torch.tensor(y, dtype=torch.long)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# Save metadata for evaluation
+torch.save({
+    'word_to_index': word_to_index,
+    'index_to_word': index_to_word,
+    'X_test': X_test,
+    'y_test': y_test,
+    'vocab_size': len(word_to_index) + 1
+}, 'model_metadata.pth')
 
 # Prepare DataLoader
-dataset = TensorDataset(X, y)
-dataloader = DataLoader(dataset, batch_size=128, shuffle=True)
+train_dataset = TensorDataset(X_train, y_train)
+dataloader = DataLoader(train_dataset, batch_size=128, shuffle=True)
 
 class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
-            self.decay_net = nn.Linear(embedding_dim, 1)  # Was missing closing )
-            self.layer_norm = nn.LayerNorm(embedding_dim)  # Was on same line without separator
+        self.decay_net = nn.Linear(embedding_dim, 1)
+        self.layer_norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, C, V, W):
         batch_size, seq_len, _ = C.shape
@@ -102,7 +113,7 @@ class AttentionStreamBlock(nn.Module):
         shifted = self.shift(x, x_prev)
         merged = self.sequence_merging(shifted, shifted, shifted)
         coupled = self.state_coupling(merged)
-        return shifted + coupled  # Residual connection
+        return shifted + coupled
 
 class AttentionStreamModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, num_layers=1):
@@ -117,8 +128,23 @@ class AttentionStreamModel(nn.Module):
     def forward(self, x):
         x = self.embeddings(x)
         for block in self.blocks:
-            x = block(x, None)  # x_prev handled internally
-        return self.fc(x[:, -1, :])  # Last token output
+            x = block(x, None)
+        return self.fc(x[:, -1, :])
+
+    def generate(self, context, max_length=20, temperature=1.0):
+        self.eval()
+        generated = []
+        current_seq = context.to(self.embeddings.weight.device)
+        
+        with torch.no_grad():
+            for _ in range(max_length):
+                output = self(current_seq)
+                probs = torch.softmax(output / temperature, dim=1)
+                next_idx = torch.argmax(probs, dim=1)
+                generated.append(next_idx.item())
+                current_seq = torch.cat([current_seq[:, 1:], next_idx.unsqueeze(0)], dim=1)
+                
+        return generated
 
 # Hyperparameters
 embedding_dim = 50
@@ -155,7 +181,16 @@ else:
         print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader)}')
     
     torch.save(model.state_dict(), model_path)
-    print("Model saved.")
+    torch.save({
+        'word_to_index': word_to_index,
+        'index_to_word': index_to_word,
+        'X_test': X_test,
+        'y_test': y_test,
+        'vocab_size': vocab_size
+    }, 'model_metadata.pth')
+    print("Model and metadata saved.")
+
+
 
 # Prediction function
 def predict_next_word(sequence, word_to_index, index_to_word, model):
@@ -166,6 +201,7 @@ def predict_next_word(sequence, word_to_index, index_to_word, model):
         output = model(sequence)
         return index_to_word[torch.argmax(output).item()]
 
+# THEN HAVE THE INTERACTIVE GENERATION LOOP
 # Interactive generation
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
