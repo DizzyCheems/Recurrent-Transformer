@@ -1,48 +1,64 @@
 import torch
-from torch.utils.data import TensorDataset, DataLoader
-from model.attention_stream import AttentionStreamModel
-from metrics import MetricCalculator
+from AttentionStream import AttentionStreamModel
 
 # Load metadata
-metadata = torch.load('model_metadata.pth')
+metadata = torch.load('model_metadata.pth', map_location='cpu')
 word_to_index = metadata['word_to_index']
 index_to_word = metadata['index_to_word']
-X_test = metadata['X_test']
-y_test = metadata['y_test']
 vocab_size = metadata['vocab_size']
+seq_length = 5  # Should match training sequence length
 
-# Configuration
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+# Initialize model
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = AttentionStreamModel(vocab_size, embedding_dim=50).to(device)
+model.load_state_dict(torch.load('attention_stream_model.pth', map_location=device))
+model.eval()
 
-def main():
-    # Load model
-    model = AttentionStreamModel(vocab_size, embedding_dim=50)
-    model.load_state_dict(torch.load("attention_stream_model.pth", map_location=device))
-    model.to(device)
+def predict_next_word(context, temperature=1.0):
+    """Generate next word given a context"""
+    # Convert context to tensor
+    words = context.split()
+    if len(words) != seq_length:
+        raise ValueError(f"Context must be exactly {seq_length} words")
     
-    # Create test dataset
-    test_dataset = TensorDataset(X_test, y_test)
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    encoded = [word_to_index.get(word, 0) for word in words]
+    input_tensor = torch.tensor(encoded, dtype=torch.long).unsqueeze(0).to(device)
     
-    # Initialize calculator
-    calculator = MetricCalculator(
-        model=model,
-        word_to_index=word_to_index,
-        index_to_word=index_to_word,
-        X_test=X_test,
-        y_test=y_test,
-        device=device
-    )
+    with torch.no_grad():
+        output = model(input_tensor)
+        probs = torch.softmax(output / temperature, dim=1)
+        next_idx = torch.argmax(probs, dim=1).item()
     
-    # Calculate metrics
-    print("Calculating Perplexity...")
-    ppl = calculator.calculate_perplexity(test_loader)
-    print(f"Perplexity: {ppl:.2f}")
+    return index_to_word.get(next_idx, '<UNK>')
+
+def generate_text(seed, max_length=20, temperature=1.0):
+    """Generate sequence starting with seed"""
+    generated = seed.split()
+    for _ in range(max_length):
+        context = ' '.join(generated[-seq_length:])
+        if len(context.split()) < seq_length:
+            # Pad with special token if needed
+            context = '<PAD> ' * (seq_length - len(context.split())) + context
+        next_word = predict_next_word(context, temperature)
+        generated.append(next_word)
+    return ' '.join(generated)
+
+# Interactive generation loop
+print("\n\033[94mModel loaded! Enter a seed sequence of exactly 5 words (type 'exit' to quit):\033[0m")
+while True:
+    try:
+        seed = input("\033[94mSeed sequence: \033[0m").strip().lower()
+        if seed == 'exit':
+            break
+        
+        if len(seed.split()) != seq_length:
+            print(f"\033[91mError: Input must be exactly {seq_length} words.\033[0m")
+            continue
+        
+        generated_text = generate_text(seed)
+        print(f"\033[92mGenerated text: {generated_text}\033[0m\n")
     
-    print("\nCalculating Cosine Similarity...")
-    cos_sim = calculator.calculate_cosine_sim(test_loader)
-    print(f"Cosine Similarity: {cos_sim:.4f}")
-    
-    print("\nCalculating ROUGE-L...")
-    rouge = calculator.calculate_rouge(test_samples=100)
-    print(f"ROUGE-L F1: {rouge:.4f}")
+    except ValueError as e:
+        print(f"\033[91mError: {e}\033[0m")
+    except Exception as e:
+        print(f"\033[91mAn error occurred: {str(e)}\033[0m")

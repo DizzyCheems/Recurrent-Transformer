@@ -159,11 +159,33 @@ model.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
+def calculate_perplexity(model, test_loader, device):
+    """Calculate perplexity on test set"""
+    model.eval()
+    total_loss = 0
+    criterion = nn.CrossEntropyLoss()
+    
+    with torch.no_grad():
+        for inputs, targets in test_loader:
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            total_loss += loss.item()
+    
+    return torch.exp(torch.tensor(total_loss / len(test_loader)))
+
 # Model loading/saving
 model_path = 'attention_stream_model.pth'
 if os.path.exists(model_path):
     model.load_state_dict(torch.load(model_path, map_location=device))
     print("Loaded saved model.")
+    
+    # Calculate perplexity for loaded model
+    test_dataset = TensorDataset(X_test, y_test)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    perplexity = calculate_perplexity(model, test_loader, device)
+    print(f"Test Perplexity: {perplexity:.2f}")
+    
 else:
     # Training loop
     epochs = 55
@@ -180,6 +202,13 @@ else:
         
         print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader)}')
     
+    # Calculate final perplexity
+    test_dataset = TensorDataset(X_test, y_test)
+    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+    perplexity = calculate_perplexity(model, test_loader, device)
+    print(f"\nFinal Test Perplexity: {perplexity:.2f}")
+    
+    # Save model and metadata
     torch.save(model.state_dict(), model_path)
     torch.save({
         'word_to_index': word_to_index,
@@ -189,6 +218,7 @@ else:
         'vocab_size': vocab_size
     }, 'model_metadata.pth')
     print("Model and metadata saved.")
+
 
 
 
