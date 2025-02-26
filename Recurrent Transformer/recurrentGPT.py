@@ -31,10 +31,6 @@ def load_text_data(folder_path):
         text = file.read()
     return text
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 class AttentionStream(nn.Module):
     def __init__(self, vocab_size, embedding_dim=256, hidden_dim=256, num_layers=8, dropout=0.2, num_classes=16):
         super(AttentionStream, self).__init__()
@@ -42,63 +38,81 @@ class AttentionStream(nn.Module):
         self.rnn = nn.RNN(embedding_dim, hidden_dim, num_layers=num_layers, dropout=dropout, batch_first=True)
         self.fc = nn.Linear(hidden_dim, vocab_size)
         self.dropout = nn.Dropout(dropout)
+        self.hidden_dim = hidden_dim
 
         # Linear projections for attention mechanism
-        self.attention_character = nn.Linear(hidden_dim, hidden_dim)  # Receptance vector
-        self.time_modulation = nn.Parameter(torch.ones(hidden_dim))  # Weight decay vector
-        self.attention_key = nn.Linear(hidden_dim, hidden_dim)  # Key vector
-        self.attention_value = nn.Linear(hidden_dim, hidden_dim)  # Value vector
-        self.output_weights = nn.Linear(hidden_dim, hidden_dim)  # Output weights
+        self.attention_character = nn.Linear(hidden_dim, hidden_dim)
+        self.time_modulation = nn.Parameter(torch.ones(hidden_dim))
+        self.attention_key = nn.Linear(hidden_dim, hidden_dim)
+        self.attention_value = nn.Linear(hidden_dim, hidden_dim)
+        self.output_weights = nn.Linear(hidden_dim, hidden_dim)
 
-        self.sequence_merging = nn.Linear(hidden_dim * 2, hidden_dim)  # For combining inputs
-        self.class_merging = nn.Linear(hidden_dim * 2, hidden_dim)  # Class merging
+        self.sequence_merging = nn.Linear(hidden_dim * 2, hidden_dim)
+        self.class_merging = nn.Linear(hidden_dim * 2, hidden_dim)
 
-        # Add a classification layer
         self.classification_layer = nn.Linear(hidden_dim, num_classes)
 
-        # Layer Normalization layers
         self.layer_norm_rnn = nn.LayerNorm(hidden_dim)
         self.layer_norm_attention = nn.LayerNorm(hidden_dim)
         self.layer_norm_output = nn.LayerNorm(hidden_dim)
 
+    def create_look_ahead_mask(self, seq_length):
+        mask = torch.triu(torch.ones(seq_length, seq_length), diagonal=1).bool()
+        return mask
+
     def forward(self, x):
+        batch_size, seq_length = x.size()
         x = self.embedding(x)
         
-        # RNN layer with residual connection and LayerNorm
+        # RNN layer with residual connection
         rnn_out, _ = self.rnn(x)
-        rnn_out = self.layer_norm_rnn(rnn_out + x)  # Residual connection with layer norm
+        rnn_out = self.layer_norm_rnn(rnn_out + x)
         rnn_out = self.dropout(rnn_out)
 
-        # Token merging with residual connection and LayerNorm
-        prev_x = torch.roll(rnn_out, shifts=1, dims=1)  # Shift tokens for token merging
+        # Create attention mask
+        look_ahead_mask = self.create_look_ahead_mask(seq_length).to(x.device)
 
+        # Prepare shifted version for token merging
+        prev_x = torch.roll(rnn_out, shifts=1, dims=1)
+        prev_x[:, 0] = 0  # Zero out the first position
+
+        # Compute attention components
         C_t = self.attention_character(rnn_out) + self.attention_character(prev_x)
         A_t = self.attention_key(rnn_out) + self.attention_key(prev_x)
         T_t = self.attention_value(rnn_out) + self.attention_value(prev_x)
 
-        # Apply time modulation on C_t
-        C_t = C_t * self.time_modulation  # Apply time modulation here
+        # Apply time modulation
+        C_t = C_t * self.time_modulation
 
-        # Sequence merging with residual connection and LayerNorm
-        mixed_input = self.sequence_merging(torch.cat([C_t, A_t], dim=-1))
-        mixed_input = self.layer_norm_attention(mixed_input + C_t)  # Residual connection with LayerNorm
+        # Compute attention scores
+        attn_scores = torch.matmul(C_t, A_t.transpose(-2, -1)) / (self.hidden_dim ** 0.5)
+        
+        # Apply look-ahead mask
+        attn_scores = attn_scores.masked_fill(look_ahead_mask.unsqueeze(0).unsqueeze(-1), float('-inf'))
+        
+        # Compute attention weights
+        attn_weights = torch.softmax(attn_scores, dim=-1)
+        
+        # Apply attention to values
+        context = torch.matmul(attn_weights, T_t)
 
-        # Class merging with residual connection and LayerNorm
+        # Sequence merging
+        mixed_input = self.sequence_merging(torch.cat([context, A_t], dim=-1))
+        mixed_input = self.layer_norm_attention(mixed_input + context)
+
+        # Class merging
         mixed_output = self.class_merging(torch.cat([mixed_input, T_t], dim=-1))
-        mixed_output = self.layer_norm_attention(mixed_output + mixed_input)  # Residual connection with LayerNorm
+        mixed_output = self.layer_norm_attention(mixed_output + mixed_input)
 
-        # Apply time modulation again to mixed_output
-        mixed_output = mixed_output * self.time_modulation  # Apply time modulation again here
-
-        # Output gating with residual connection and LayerNorm
+        # Output gating
         ot = self.output_weights(mixed_output)
-        ot = self.layer_norm_output(ot + mixed_output)  # Residual connection with LayerNorm
+        ot = self.layer_norm_output(ot + mixed_output)
 
         # Language model output
         token_output = self.fc(ot)
 
-        # Classification output (based on the last token's hidden state)
-        class_output = self.classification_layer(rnn_out[:, -1, :])  # Use the last token's output for classification
+        # Classification output
+        class_output = self.classification_layer(rnn_out[:, -1, :])
 
         return token_output, class_output
 
@@ -195,8 +209,6 @@ def main():
         
         # Print the generated text in green
         print(f"{GREEN}{generated_text}{RESET}")
-
-
 
 if __name__ == '__main__':
     main()

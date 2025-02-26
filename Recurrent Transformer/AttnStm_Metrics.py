@@ -3,6 +3,7 @@ import torch.nn as nn
 import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from collections import Counter
+from rouge import Rouge
 import os
 from sklearn.model_selection import train_test_split
 import torch.nn.functional as F  # Add this line with other imports
@@ -243,6 +244,52 @@ def test_cosine_similarity_with_prompts(model, word_to_index, index_to_word, tes
     else:
         print("No valid test cases processed")
 
+def calculate_rouge_scores(model, word_to_index, index_to_word, test_cases, device):
+    """Calculate ROUGE scores for custom prompts with expected next words"""
+    model.eval()
+    rouge = Rouge()
+    rouge_scores = []
+    
+    for prompt, expected_next_word in test_cases:
+        # Convert prompt to indices
+        prompt_words = prompt.split()
+        if len(prompt_words) != seq_length:
+            print(f"Skipping '{prompt}': Requires exactly {seq_length} words")
+            continue
+            
+        try:
+            # Convert to tensor
+            input_seq = torch.tensor([word_to_index[word] for word in prompt_words], 
+                                   dtype=torch.long).unsqueeze(0).to(device)
+            
+            # Get model prediction
+            with torch.no_grad():
+                output = model(input_seq)
+                pred_index = torch.argmax(output, dim=1)
+                predicted_word = index_to_word[pred_index.item()]
+                
+            # Calculate ROUGE score
+            scores = rouge.get_scores(predicted_word, expected_next_word)
+            rouge_scores.append(scores[0])
+            
+            print(f"Prompt: [{prompt}]")
+            print(f"Predicted: {predicted_word} | Expected: {expected_next_word}")
+            print(f"ROUGE Scores: {scores[0]}\n")
+            
+        except KeyError as e:
+            print(f"Skipping '{prompt} → {expected_next_word}': Word {e} not in vocabulary")
+    
+    if rouge_scores:
+        avg_rouge_1 = np.mean([score['rouge-1']['f'] for score in rouge_scores])
+        avg_rouge_2 = np.mean([score['rouge-2']['f'] for score in rouge_scores])
+        avg_rouge_l = np.mean([score['rouge-l']['f'] for score in rouge_scores])
+        
+        print(f"\nAverage ROUGE-1: {avg_rouge_1:.4f}")
+        print(f"Average ROUGE-2: {avg_rouge_2:.4f}")
+        print(f"Average ROUGE-L: {avg_rouge_l:.4f}")
+    else:
+        print("No valid test cases processed")
+
 # Example usage (add this after model loading/training):
 test_cases = [
     # Valid 5-word prompts with in-vocabulary expectations
@@ -258,6 +305,7 @@ test_cases = [
 # Add this right before the interactive generation loop:
 print("\nTesting sample prompts...")
 test_cosine_similarity_with_prompts(model, word_to_index, index_to_word, test_cases, device)
+calculate_rouge_scores(model, word_to_index, index_to_word, test_cases, device)
 
 # Model loading/saving
 model_path = 'attention_stream_model.pth'
@@ -308,9 +356,6 @@ else:
         'vocab_size': vocab_size
     }, 'model_metadata.pth')
     print("Model and metadata saved.")
-
-
-
 
 # Prediction function
 def predict_next_word(sequence, word_to_index, index_to_word, model):
