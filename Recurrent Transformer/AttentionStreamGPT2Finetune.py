@@ -5,17 +5,29 @@ from torch.utils.data import DataLoader, TensorDataset
 from collections import Counter
 import os
 from sklearn.model_selection import train_test_split
+from transformers import GPT2LMHeadModel, GPT2Tokenizer
 
-with open('data.txt', 'r', encoding='utf-8') as file:
+# Define the device (CPU or GPU)
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+# Load the data
+with open('test.txt', 'r', encoding='utf-8') as file:
     data = file.read()
 
+# Tokenization and creating a word-to-index mapping
 words = data.split()
 word_counts = Counter(words)
 word_to_index = {word: i+1 for i, (word, _) in enumerate(word_counts.items())}
 index_to_word = {i: word for word, i in word_to_index.items()}
 
-encoded_data = [word_to_index[word] for word in words]
+# Add an unknown token for out-of-vocabulary words
+word_to_index['<UNK>'] = len(word_to_index) + 1
+index_to_word[len(index_to_word) + 1] = '<UNK>'
 
+# Encode words as indices
+encoded_data = [word_to_index.get(word, word_to_index['<UNK>']) for word in words]
+
+# Prepare input-output pairs (context, next word)
 seq_length = 5
 X = []
 y = []
@@ -26,18 +38,12 @@ for i in range(len(encoded_data) - seq_length):
 X = np.array(X)
 y = np.array(y)
 
+# Convert to tensors and split data
 X = torch.tensor(X, dtype=torch.long)
 y = torch.tensor(y, dtype=torch.long)
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-torch.save({
-    'word_to_index': word_to_index,
-    'index_to_word': index_to_word,
-    'X_test': X_test,
-    'y_test': y_test,
-    'vocab_size': len(word_to_index) + 1
-}, 'model_metadata.pth')
-
+# Prepare DataLoader
 train_dataset = TensorDataset(X_train, y_train)
 dataloader = DataLoader(train_dataset, batch_size=128, shuffle=True)
 
@@ -88,7 +94,7 @@ class StateCoupling(nn.Module):
 class Shift(nn.Module):
     def __init__(self, input_dim):
         super(Shift, self).__init__()
-        self.mu = nn.Parameter(torch.tensor(0.5))
+        self.mu = nn.Parameter(torch.tensor(0.5))  # Fix: Use torch.tensor instead of tectorch.tensor
 
     def forward(self, x, x_prev):
         if x_prev is None:
@@ -124,28 +130,23 @@ class AttentionStreamModel(nn.Module):
             x = block(x, None)
         return self.fc(x[:, -1, :])
 
-    def generate(self, context, max_length=20, temperature=1.0):
-        self.eval()
-        generated = []
-        current_seq = context.to(self.embeddings.weight.device)
-        
-        with torch.no_grad():
-            for _ in range(max_length):
-                output = self(current_seq)
-                probs = torch.softmax(output / temperature, dim=1)
-                next_idx = torch.argmax(probs, dim=1)
-                generated.append(next_idx.item())
-                current_seq = torch.cat([current_seq[:, 1:], next_idx.unsqueeze(0)], dim=1)
-                
-        return generated
-
 # Hyperparameters
 embedding_dim = 50
-vocab_size = len(word_to_index) + 1
+
+# Load the pre-trained model's metadata (if available)
+metadata_path = 'model_metadata.pth'
+if os.path.exists(metadata_path):
+    metadata = torch.load(metadata_path, map_location=device)
+    vocab_size = metadata['vocab_size']
+    print(f"Loaded vocabulary size from metadata: {vocab_size}")
+else:
+    print("No metadata found. Using vocabulary size from the dataset.")
+    vocab_size = len(word_to_index) + 1
+
+# Initialize the model with the correct vocabulary size
 model = AttentionStreamModel(vocab_size, embedding_dim)
 
-# Device setup
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+# Move the model to the device
 model.to(device)
 
 # Training setup
@@ -180,58 +181,67 @@ if os.path.exists(model_path):
     print(f"Test Perplexity: {perplexity:.2f}")
     
 else:
-    # Training loop
-    epochs = 55
-    for epoch in range(epochs):
-        total_loss = 0
-        for batch_X, batch_y in dataloader:
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            optimizer.zero_grad()
-            outputs = model(batch_X)
-            loss = criterion(outputs, batch_y)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-        
-        print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader)}')
+    print("No saved model found. Please train a model first.")
+    exit()
+
+# Finetuning loop
+epochs = 50
+for epoch in range(epochs):
+    total_loss = 0
+    for batch_X, batch_y in dataloader:
+        batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+        optimizer.zero_grad()
+        outputs = model(batch_X)
+        loss = criterion(outputs, batch_y)
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
     
-    # Calculate final perplexity
-    test_dataset = TensorDataset(X_test, y_test)
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
-    perplexity = calculate_perplexity(model, test_loader, device)
-    print(f"\nFinal Test Perplexity: {perplexity:.2f}")
+    print(f'Finetuning Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader)}')
+
+# Calculate final perplexity after finetuning
+test_dataset = TensorDataset(X_test, y_test)
+test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
+perplexity = calculate_perplexity(model, test_loader, device)
+print(f"\nFinal Test Perplexity after Finetuning: {perplexity:.2f}")
+
+# Save finetuned model
+torch.save(model.state_dict(), 'attention_stream_model_finetuned.pth')
+print("Finetuned model saved.")
+
+# Load GPT-2 model and tokenizer
+gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2')
+gpt2_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+gpt2_model.to(device)
+
+# Prediction function using GPT-2
+def predict_next_word_gpt2(sequence, gpt2_model, gpt2_tokenizer, max_length=100, temperature=0.5):
+    gpt2_model.eval()
+    input_ids = gpt2_tokenizer.encode(sequence, return_tensors='pt').to(device)
     
-    # Save model and metadata
-    torch.save(model.state_dict(), model_path)
-    torch.save({
-        'word_to_index': word_to_index,
-        'index_to_word': index_to_word,
-        'X_test': X_test,
-        'y_test': y_test,
-        'vocab_size': vocab_size
-    }, 'model_metadata.pth')
-    print("Model and metadata saved.")
-
-
-
-
-def predict_next_word(sequence, word_to_index, index_to_word, model):
-    model.eval()
-    sequence = [word_to_index.get(word, 0) for word in sequence.split()]
-    sequence = torch.tensor(sequence, dtype=torch.long).unsqueeze(0).to(device)
+    # Create attention mask
+    attention_mask = torch.ones(input_ids.shape, device=device)
+    
     with torch.no_grad():
-        output = model(sequence)
-        return index_to_word[torch.argmax(output).item()]
+        output = gpt2_model.generate(
+            input_ids,
+            attention_mask=attention_mask,
+            max_length=max_length,
+            temperature=temperature,
+            do_sample=True,
+            top_k=50,
+            top_p=0.95,
+            num_return_sequences=1
+        )
+    
+    return gpt2_tokenizer.decode(output[0], skip_special_tokens=True)
 
+# Interactive generation with GPT-2
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
     input_seq = input("\033[94mInput: \033[0m")
     if input_seq.lower() == "exit":
         break
     
-    generated = input_seq.split()
-    for _ in range(20):
-        context = ' '.join(generated[-seq_length:])
-        generated.append(predict_next_word(context, word_to_index, index_to_word, model))
-    
-    print(f"\033[92mGenerated: {' '.join(generated[len(input_seq.split()):])}\033[0m\n")
+    generated = predict_next_word_gpt2(input_seq, gpt2_model, gpt2_tokenizer)
+    print(f"\033[92mGenerated: {generated}\033[0m\n")
