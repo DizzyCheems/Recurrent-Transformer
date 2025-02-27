@@ -6,6 +6,9 @@ from collections import Counter
 import os
 from sklearn.model_selection import train_test_split
 import ollama  # Import Ollama
+from sklearn.metrics.pairwise import cosine_similarity
+from rouge import Rouge  # For ROUGE score calculation
+from sentence_transformers import SentenceTransformer  # For cosine similarity embeddings
 
 # Define the device (CPU or GPU)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -209,6 +212,12 @@ print(f"\nFinal Test Perplexity after Finetuning: {perplexity:.2f}")
 torch.save(model.state_dict(), 'attention_stream_model_finetuned.pth')
 print("Finetuned model saved.")
 
+# Load SentenceTransformer for cosine similarity
+sentence_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Initialize ROUGE scorer
+rouge = Rouge()
+
 # Prediction function using Ollama
 def predict_next_word_ollama(sequence, model_name="llama3", max_length=10, temperature=0.5):
     response = ollama.generate(
@@ -221,6 +230,16 @@ def predict_next_word_ollama(sequence, model_name="llama3", max_length=10, tempe
     )
     return response["response"]
 
+# Function to compute cosine similarity
+def compute_cosine_similarity(text1, text2):
+    embeddings = sentence_model.encode([text1, text2])
+    return cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
+
+# Function to compute ROUGE score
+def compute_rouge_score(reference, hypothesis):
+    scores = rouge.get_scores(hypothesis, reference)
+    return scores[0]
+
 # Interactive generation with Ollama
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
@@ -230,3 +249,11 @@ while True:
     
     generated = predict_next_word_ollama(input_seq)
     print(f"\033[92mGenerated: {generated}\033[0m\n")
+    
+    # Compute cosine similarity
+    cosine_sim = compute_cosine_similarity(input_seq, generated)
+    print(f"\033[93mCosine Similarity: {cosine_sim:.4f}\033[0m")
+    
+    # Compute ROUGE score
+    rouge_scores = compute_rouge_score(input_seq, generated)
+    print(f"\033[93mROUGE Scores: {rouge_scores}\033[0m\n")
