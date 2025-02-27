@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from collections import Counter
 import os
 from sklearn.model_selection import train_test_split
-from transformers import GPT2LMHeadModel, GPT2Tokenizer
+import ollama  # Import Ollama
 
 # Define the device (CPU or GPU)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -185,7 +185,7 @@ else:
     exit()
 
 # Finetuning loop
-epochs = 50
+epochs = 1
 for epoch in range(epochs):
     total_loss = 0
     for batch_X, batch_y in dataloader:
@@ -209,39 +209,24 @@ print(f"\nFinal Test Perplexity after Finetuning: {perplexity:.2f}")
 torch.save(model.state_dict(), 'attention_stream_model_finetuned.pth')
 print("Finetuned model saved.")
 
-# Load GPT-2 model and tokenizer
-gpt2_model = GPT2LMHeadModel.from_pretrained('gpt2')
-gpt2_tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
-gpt2_model.to(device)
+# Prediction function using Ollama
+def predict_next_word_ollama(sequence, model_name="llama3", max_length=10, temperature=0.5):
+    response = ollama.generate(
+        model=model_name,
+        prompt=sequence,
+        options={
+            "max_length": max_length,
+            "temperature": temperature,
+        }
+    )
+    return response["response"]
 
-# Prediction function using GPT-2
-def predict_next_word_gpt2(sequence, gpt2_model, gpt2_tokenizer, max_length=100, temperature=0.5):
-    gpt2_model.eval()
-    input_ids = gpt2_tokenizer.encode(sequence, return_tensors='pt').to(device)
-    
-    # Create attention mask
-    attention_mask = torch.ones(input_ids.shape, device=device)
-    
-    with torch.no_grad():
-        output = gpt2_model.generate(
-            input_ids,
-            attention_mask=attention_mask,
-            max_length=max_length,
-            temperature=temperature,
-            do_sample=True,
-            top_k=50,
-            top_p=0.95,
-            num_return_sequences=1
-        )
-    
-    return gpt2_tokenizer.decode(output[0], skip_special_tokens=True)
-
-# Interactive generation with GPT-2
+# Interactive generation with Ollama
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
     input_seq = input("\033[94mInput: \033[0m")
     if input_seq.lower() == "exit":
         break
     
-    generated = predict_next_word_gpt2(input_seq, gpt2_model, gpt2_tokenizer)
+    generated = predict_next_word_ollama(input_seq)
     print(f"\033[92mGenerated: {generated}\033[0m\n")
