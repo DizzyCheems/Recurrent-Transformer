@@ -136,13 +136,13 @@ embedding_dim = 50
 # Load the pre-trained model's metadata (if available)
 metadata_path = 'model_metadata.pth'
 if os.path.exists(metadata_path):
-    metadata = torch.load(metadata_path, map_location=device)
+    metadata = torch.load(metadata_path, map_location=device, weights_only=True)  # Set weights_only=True
     vocab_size = metadata['vocab_size']
     print(f"Loaded vocabulary size from metadata: {vocab_size}")
 else:
     print("No metadata found. Using vocabulary size from the dataset.")
     vocab_size = len(word_to_index) + 1
-
+    
 # Initialize the model with the correct vocabulary size
 model = AttentionStreamModel(vocab_size, embedding_dim)
 
@@ -171,7 +171,7 @@ def calculate_perplexity(model, test_loader, device):
 # Model loading/saving
 model_path = 'attention_stream_model.pth'
 if os.path.exists(model_path):
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))  # Set weights_only=True
     print("Loaded saved model.")
     
     # Calculate perplexity for loaded model
@@ -183,7 +183,7 @@ if os.path.exists(model_path):
 else:
     print("No saved model found. Please train a model first.")
     exit()
-
+    
 # Finetuning loop
 epochs = 1
 for epoch in range(epochs):
