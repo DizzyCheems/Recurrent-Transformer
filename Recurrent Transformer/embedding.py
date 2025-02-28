@@ -4,25 +4,36 @@ import ollama
 import random
 import numpy as np
 
-# Step 1: Get the text response from tinyllama for the prompt
-prompt = "What animals are llamas related to?"
+# Step 1: Define multiple prompts for the tinyllama model
+prompts = [
+    "What animals are llamas related to?",
+    "How do llamas adapt to cold weather?",
+    "What is the history of llamas in South America?",
+    "Can llamas be used as pack animals?",
+    "What are the differences between llamas and alpacas?"
+]
 
-# Using ollama.chat to get the generated response text
-response = ollama.chat(model="tinyllama", messages=[{"role": "user", "content": prompt}])
+# Step 2: Get multiple responses for each prompt
+def get_responses_from_tinyllama(prompts, num_responses=3):
+    responses = []
+    
+    for prompt in prompts:
+        for _ in range(num_responses):  # Get multiple responses for each prompt
+            response = ollama.chat(model="tinyllama", messages=[{"role": "user", "content": prompt}])
+            generated_text = response.message.content
+            responses.append((prompt, generated_text))  # Store prompt and generated response as a tuple
+    
+    return responses
 
-# Print the entire response object to inspect its structure (for debugging purposes)
-print("Full Response from tinyllama:", response)
+# Step 3: Generate a large set of prompts and responses
+responses = get_responses_from_tinyllama(prompts, num_responses=3)
 
-# Extract the generated text from the response
-generated_text = response.message.content
-print("Generated Response Text from tinyllama:", generated_text)
+# Step 4: Tokenize the combined responses and create a vocabulary
+tokens = []
+for prompt, response in responses:
+    tokens.extend(prompt.split())
+    tokens.extend(response.split())
 
-# Concatenate the prompt and generated response
-combined_text = prompt + " " + generated_text
-print("Combined Text:", combined_text)
-
-# Step 2: Tokenize the combined text to create a vocabulary
-tokens = combined_text.split()  # Split into tokens (words)
 vocabulary = list(set(tokens))  # Create a unique vocabulary from tokens
 vocab_size = len(vocabulary)
 
@@ -30,13 +41,14 @@ vocab_size = len(vocabulary)
 word_to_idx = {word: idx for idx, word in enumerate(vocabulary)}
 idx_to_word = {idx: word for word, idx in word_to_idx.items()}
 
-# Step 3: Convert tokens into indices
-indices = [word_to_idx[token] for token in tokens]
+# Step 5: Convert tokens into indices
+indices = []
+for prompt, response in responses:
+    prompt_indices = [word_to_idx[token] for token in prompt.split()]
+    response_indices = [word_to_idx[token] for token in response.split()]
+    indices.append((prompt_indices, response_indices))
 
-# Convert the indices into a tensor to feed into the RNN
-input_tensor = torch.tensor(indices).unsqueeze(0)  # Add batch dimension (1, seq_len)
-
-# Step 4: Define a simple RNN-based model
+# Step 6: Define the RNN model
 class RNNModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, hidden_size, output_size):
         super(RNNModel, self).__init__()
@@ -51,16 +63,13 @@ class RNNModel(nn.Module):
         out = self.fc(out)  # Pass through the fully connected layer
         return out, hn  # Return the output and the hidden state for embeddings
 
-# Step 5: Instantiate the model
+# Step 7: Instantiate the model
 embedding_dim = 50  # You can adjust this value
 hidden_size = 128   # You can adjust this value
 output_size = vocab_size  # Output size should match the vocabulary size
 model = RNNModel(vocab_size, embedding_dim, hidden_size, output_size)
 
-# Step 6: Pass the input tensor through the model
-output, hidden = model(input_tensor)
-
-# Function to generate a sequence based on the prompt with temperature sampling
+# Step 8: Function to generate a sequence from the RNN model with temperature sampling
 def generate_sequence(model, prompt, max_length=30, temperature=1.0):
     model.eval()  # Set the model to evaluation mode
 
@@ -94,6 +103,12 @@ def generate_sequence(model, prompt, max_length=30, temperature=1.0):
 
     return " ".join(generated_sequence)  # Join the sequence of words
 
-# Step 7: Generate a sequence from the RNN model with temperature sampling
-generated_text_from_rnn = generate_sequence(model, combined_text, max_length=30, temperature=0.7)  # Generate up to 30 words
-print("Generated Text from RNN:", generated_text_from_rnn)
+# Step 9: Generate sequences based on the RNN and temperature sampling
+generated_sequences = []
+for prompt, _ in responses:
+    generated_sequence = generate_sequence(model, prompt, max_length=30, temperature=0.7)  # Adjust temperature as needed
+    generated_sequences.append(generated_sequence)
+
+# Print out the generated sequences
+for i, seq in enumerate(generated_sequences):
+    print(f"Generated Sequence {i+1}: {seq}")
