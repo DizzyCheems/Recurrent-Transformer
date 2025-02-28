@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 import ollama
+import random
+import numpy as np
 
 # Step 1: Get the text response from tinyllama for the prompt
 prompt = "What animals are llamas related to?"
@@ -15,42 +17,83 @@ print("Full Response from tinyllama:", response)
 generated_text = response.message.content
 print("Generated Response Text from tinyllama:", generated_text)
 
-# Now let's also get the embeddings for the generated response
-response_embedding = ollama.embed(model="tinyllama", input=generated_text)
-response_embedding = torch.tensor(response_embedding['embeddings'][0]).unsqueeze(0)  # Add batch dimension
+# Concatenate the prompt and generated response
+combined_text = prompt + " " + generated_text
+print("Combined Text:", combined_text)
 
-# Step 2: Define a simple RNN in PyTorch
-class SimpleRNN(nn.Module):
-    def __init__(self, input_size, hidden_size, output_size):
-        super(SimpleRNN, self).__init__()
-        self.rnn = nn.RNN(input_size, hidden_size, batch_first=True)
+# Step 2: Tokenize the combined text to create a vocabulary
+tokens = combined_text.split()  # Split into tokens (words)
+vocabulary = list(set(tokens))  # Create a unique vocabulary from tokens
+vocab_size = len(vocabulary)
+
+# Map tokens to indices and vice versa
+word_to_idx = {word: idx for idx, word in enumerate(vocabulary)}
+idx_to_word = {idx: word for word, idx in word_to_idx.items()}
+
+# Step 3: Convert tokens into indices
+indices = [word_to_idx[token] for token in tokens]
+
+# Convert the indices into a tensor to feed into the RNN
+input_tensor = torch.tensor(indices).unsqueeze(0)  # Add batch dimension (1, seq_len)
+
+# Step 4: Define a simple RNN-based model
+class RNNModel(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, hidden_size, output_size):
+        super(RNNModel, self).__init__()
+        self.embedding = nn.Embedding(vocab_size, embedding_dim)  # Learnable embeddings
+        self.rnn = nn.RNN(embedding_dim, hidden_size, batch_first=True)
         self.fc = nn.Linear(hidden_size, output_size)
     
     def forward(self, x):
-        # The input tensor must have the shape (batch_size, seq_len, input_size)
-        out, _ = self.rnn(x)  # Pass through the RNN
+        embedded = self.embedding(x)  # Get embeddings for the tokens
+        out, hn = self.rnn(embedded)  # Pass through the RNN
         out = out[:, -1, :]  # Get the last hidden state from the sequence
         out = self.fc(out)  # Pass through the fully connected layer
-        return out
+        return out, hn  # Return the output and the hidden state for embeddings
 
-# Step 3: Instantiate the model
-input_size = response_embedding.shape[-1]  # The size after embedding (should match the embedding size)
-hidden_size = 128  # You can adjust this
-output_size = 10  # Example: Number of output classes (you can change this)
-model = SimpleRNN(input_size, hidden_size, output_size)
+# Step 5: Instantiate the model
+embedding_dim = 50  # You can adjust this value
+hidden_size = 128   # You can adjust this value
+output_size = vocab_size  # Output size should match the vocabulary size
+model = RNNModel(vocab_size, embedding_dim, hidden_size, output_size)
 
-# Step 4: Define a simple vocabulary (for demonstration)
-vocabulary = ["cat", "dog", "llama", "sheep", "horse", "cow", "bird", "fish", "tiger", "elephant"]
+# Step 6: Pass the input tensor through the model
+output, hidden = model(input_tensor)
 
-# Step 5: Reshape the embedding to have a sequence length of 1
-response_embedding = response_embedding.unsqueeze(1)  # Now the shape will be (1, 1, input_size)
+# Function to generate a sequence based on the prompt with temperature sampling
+def generate_sequence(model, prompt, max_length=30, temperature=1.0):
+    model.eval()  # Set the model to evaluation mode
 
-# Step 6: Pass the reshaped response embedding through the RNN
-output = model(response_embedding.float())
+    # Start with the initial prompt and convert it into indices
+    tokens = prompt.split()
+    indices = [word_to_idx[token] for token in tokens]
+    input_tensor = torch.tensor(indices).unsqueeze(0)  # Add batch dimension (1, seq_len)
 
-# Step 7: Convert the RNN output to a word by finding the index of the highest value
-_, predicted_idx = torch.max(output, dim=1)  # Get the index with the highest value
-predicted_word = vocabulary[predicted_idx.item()]  # Map the index to a word
+    generated_sequence = tokens  # Start with the prompt as part of the generated sequence
 
-# Step 8: Print the predicted word
-print(predicted_word)
+    for _ in range(max_length):  # Generate a sequence up to max_length
+        output, hidden = model(input_tensor)  # Forward pass through the RNN
+
+        # Apply temperature scaling to the output logits
+        output = output / temperature  # Scale the logits by temperature
+
+        # Use softmax to get probabilities for the next word
+        probabilities = torch.softmax(output, dim=1)
+
+        # Sample the next word based on the probabilities
+        next_word_idx = torch.multinomial(probabilities, 1).item()
+
+        # Get the predicted word
+        predicted_word = idx_to_word[next_word_idx]
+
+        # Append the predicted word to the sequence
+        generated_sequence.append(predicted_word)
+
+        # Update the input tensor to include the predicted word
+        input_tensor = torch.tensor([next_word_idx]).unsqueeze(0)  # Update with new token
+
+    return " ".join(generated_sequence)  # Join the sequence of words
+
+# Step 7: Generate a sequence from the RNN model with temperature sampling
+generated_text_from_rnn = generate_sequence(model, combined_text, max_length=30, temperature=0.7)  # Generate up to 30 words
+print("Generated Text from RNN:", generated_text_from_rnn)
