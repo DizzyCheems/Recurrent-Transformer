@@ -161,7 +161,7 @@ print("Model updated with new embeddings for the new vocabulary size:", new_voca
 # Example of generating sequences based on the updated model
 generated_sequences = []
 for prompt, _ in responses:
-    generated_sequence = generate_sequence(model, prompt, max_length=30, temperature=0.7)  # Adjust temperature as needed
+    generated_sequence = generate_sequence(model, prompt, max_length=30, temperature=0.7)  # Adjust tempesrature as needed
     generated_sequences.append(generated_sequence)
 
 # Print out the generated sequences with colors
