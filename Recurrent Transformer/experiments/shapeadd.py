@@ -6,20 +6,27 @@ from torch.utils.data import Dataset, DataLoader
 from collections import Counter
 import time  # For unique filenames
 
-# Step 1: Define a single prompt for the TinyLlama model
-prompt = "Write me a paragrah about wolves"
+# Step 1: Define a list of logical reasoning prompts
+prompts = [
+"If two cars start from the same point and travel in opposite directions, how far apart will they be after 1 hour if one car travels at 50 mph and the other at 60 mph?"
+"How many months have 28 days?"
+"A man is pushing his car along a road when he comes to a hotel. He shouts, 'I'm bankrupt!' Why?"
+"What comes once in a minute, twice in a moment, but never in a thousand years?"
+]
 
-# Step 2: Get a single response from TinyLlama
+# Step 2: Get a response from TinyLlama for each prompt
 def get_response_from_tinyllama(prompt):
     response = ollama.chat(model="tinyllama", messages=[{"role": "user", "content": prompt}])
     generated_text = response.message.content
     return generated_text
 
-# Step 3: Get the response from TinyLlama
-tinyllama_response = get_response_from_tinyllama(prompt)
+# Step 3: Get the responses from TinyLlama for each prompt
+responses = [get_response_from_tinyllama(prompt) for prompt in prompts]
 
-# Step 4: Tokenize the prompt and response to create a vocabulary
-tokens = prompt.split() + tinyllama_response.split()
+# Step 4: Tokenize the prompts and responses to create a vocabulary
+tokens = []
+for prompt, response in zip(prompts, responses):
+    tokens.extend(prompt.split() + response.split())
 vocabulary = list(set(tokens))  # Create a unique vocabulary from tokens
 vocab_size = len(vocabulary)
 
@@ -27,9 +34,9 @@ vocab_size = len(vocabulary)
 word_to_idx = {word: idx for idx, word in enumerate(vocabulary)}
 idx_to_word = {idx: word for word, idx in word_to_idx.items()}
 
-# Step 5: Convert tokens into indices
-prompt_indices = [word_to_idx[token] for token in prompt.split()]
-response_indices = [word_to_idx[token] for token in tinyllama_response.split()]
+# Step 5: Convert prompts and responses into indices
+prompt_indices = [ [word_to_idx[token] for token in prompt.split()] for prompt in prompts ]
+response_indices = [ [word_to_idx[token] for token in response.split()] for response in responses ]
 
 # Step 6: Define the RNN model
 class RNNModel(nn.Module):
@@ -42,13 +49,12 @@ class RNNModel(nn.Module):
     def forward(self, x):
         embedded = self.embedding(x)  # Get embeddings for the tokens
         out, hn = self.rnn(embedded)  # Pass through the RNN
-        out = out[:, -1, :]  # Get the last hidden state from the sequence
         out = self.fc(out)  # Pass through the fully connected layer
-        return out, hn  # Return the output and the hidden state for embeddings
+        return out, hn  # Return the output and the hidden state
 
 # Step 7: Create a new model with the updated vocabulary size
-embedding_dim = 50  # You can adjust this value
-hidden_size = 128   # You can adjust this value
+embedding_dim = 2048  # You can adjust this value
+hidden_size = 512   # You can adjust this value
 output_size = vocab_size  # Output size should match the vocabulary size
 model = RNNModel(vocab_size, embedding_dim, hidden_size, output_size)
 
@@ -60,7 +66,7 @@ def save_model(model, model_path):
     print(f"Model saved as: {unique_model_path}")
 
 # Step 9: Generate sequences based on the RNN and temperature sampling
-def generate_sequence(model, prompt, max_length=30, temperature=1.0):
+def generate_sequence(model, prompt, max_length=100, temperature=1.0):
     model.eval()  # Set the model to evaluation mode
 
     # Start with the initial prompt and convert it into indices
@@ -77,7 +83,7 @@ def generate_sequence(model, prompt, max_length=30, temperature=1.0):
         output = output / temperature  # Scale the logits by temperature
 
         # Use softmax to get probabilities for the next word
-        probabilities = torch.softmax(output, dim=1)
+        probabilities = torch.softmax(output[:, -1, :], dim=1)
 
         # Sample the next word based on the probabilities
         next_word_idx = torch.multinomial(probabilities, 1).item()
@@ -89,39 +95,75 @@ def generate_sequence(model, prompt, max_length=30, temperature=1.0):
         generated_sequence.append(predicted_word)
 
         # Update the input tensor to include the predicted word
-        input_tensor = torch.tensor([next_word_idx]).unsqueeze(0)  # Update with new token
+        input_tensor = torch.cat([input_tensor, torch.tensor([[next_word_idx]])], dim=1)
 
     return " ".join(generated_sequence)  # Join the sequence of words
 
-# Step 10: Train the RNN model on the response
-def train_model(model, prompt_indices, response_indices, num_epochs=10, learning_rate=0.001):
+# Step 10: Prepare training data as (input, target) pairs
+def prepare_data(data_indices, seq_length=5):
+    input_data = []
+    target_data = []
+    for i in range(len(data_indices) - seq_length):
+        input_data.append(data_indices[i:i + seq_length])  # Previous words (input)
+        target_data.append(data_indices[i + 1:i + seq_length + 1])  # Next word (target)
+    return input_data, target_data
+
+# Step 11: Train the RNN model on the response
+# Step 11: Train the RNN model on the response
+def train_model(model, prompt_indices, response_indices, num_epochs=20, learning_rate=0.001, seq_length=5):
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+    # Combine prompt and response indices
+    all_indices = prompt_indices + response_indices
+
+    # Prepare input-output pairs
+    input_data, target_data = prepare_data(all_indices, seq_length)
+    
+    # Convert input and target data into tensors
+    input_tensor = torch.tensor(input_data)  # Shape: (batch_size, seq_length)
+    target_tensor = torch.tensor(target_data)  # Shape: (batch_size, seq_length)
+
     for epoch in range(num_epochs):
-        model.zero_grad()
-        input_tensor = torch.tensor(prompt_indices).unsqueeze(0)  # Add batch dimension
-        target_tensor = torch.tensor(response_indices).unsqueeze(0)  # Add batch dimension
+        model.train()
+        total_loss = 0
 
-        output, _ = model(input_tensor)
-        loss = criterion(output, target_tensor[:, -1])  # Use the last token as target
-        loss.backward()
-        optimizer.step()
+        for input_seq, target in zip(input_tensor, target_tensor):
+            optimizer.zero_grad()
+            input_seq = input_seq.unsqueeze(0)  # Add batch dimension (1, seq_length)
 
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
+            # Forward pass
+            output, _ = model(input_seq)
 
-# Train the model on the generated response
-train_model(model, prompt_indices, response_indices)
+            # The output shape is (batch_size, seq_length, vocab_size)
+            # We need to calculate the loss for each word in the sequence.
+            # So we need to reshape the output and target tensors appropriately.
 
-# Step 11: Save the new model with updated embeddings and fully connected layer
+            # Reshape the output and target tensors
+            output = output.view(-1, vocab_size)  # Flatten output to (batch_size * seq_length, vocab_size)
+            target = target.view(-1)  # Flatten target to (batch_size * seq_length,)
+
+            # Calculate loss
+            loss = criterion(output, target)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(input_tensor)
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {avg_loss:.4f}')
+
+# Step 12: Train the model on the generated responses
+for prompt_idx, prompt in enumerate(prompts):
+    print(f"Training on prompt {prompt_idx+1}: {prompt}")
+    train_model(model, prompt_indices[prompt_idx], response_indices[prompt_idx])
+
+# Step 13: Save the new model with updated embeddings and fully connected layer
 model_path = "new_rnn_model"
 save_model(model, model_path)
 
-# Step 12: Generate a sequence using the RNN model
-rnn_sequence = generate_sequence(model, prompt, max_length=30, temperature=0.7)
-
-# Step 13: Print the generated sequences with color coding
-# TinyLlama's output in blue
-print("\033[94mGenerated by TinyLlama:\033[0m", tinyllama_response)
-# RNN's output in violet
-print("\033[95mGenerated by RNN:\033[0m", rnn_sequence)
+# Step 14: Generate sequences using the RNN model
+for prompt_idx, prompt in enumerate(prompts):
+    print(f"\nGenerating sequence for prompt {prompt_idx+1}: {prompt}")
+    rnn_sequence = generate_sequence(model, prompt, max_length=100, temperature=0.7)
+    print(f"Generated by RNN: {rnn_sequence}")
