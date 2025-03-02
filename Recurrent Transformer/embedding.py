@@ -3,15 +3,14 @@ import torch.nn as nn
 import ollama
 import random
 import numpy as np
+import os
 
-# Step 1: Define multiple prompts for the tinyllama model
+# Step 1: Define multiple prompts for the tinyllama model (mathematical reasoning prompts)
 prompts = [
-    "What animals are llamas related to?",
-    "How do llamas adapt to cold weather?",
-    "What is the history of llamas in South America?",
-    "Can llamas be used as pack animals?",
-    "What are the differences between llamas and alpacas?"
+    "What is the fundamental principle of counting?",
+    "What is the multiplication rule in probability?",
 ]
+
 
 # Step 2: Get multiple responses for each prompt
 def get_responses_from_tinyllama(prompts, num_responses=3):
@@ -63,13 +62,18 @@ class RNNModel(nn.Module):
         out = self.fc(out)  # Pass through the fully connected layer
         return out, hn  # Return the output and the hidden state for embeddings
 
-# Step 7: Instantiate the model
+# Step 7: Create a new model with the updated vocabulary size
 embedding_dim = 50  # You can adjust this value
 hidden_size = 128   # You can adjust this value
 output_size = vocab_size  # Output size should match the vocabulary size
 model = RNNModel(vocab_size, embedding_dim, hidden_size, output_size)
 
-# Step 8: Function to generate a sequence from the RNN model with temperature sampling
+# Step 8: Function to save the model
+def save_model(model, model_path):
+    torch.save(model.state_dict(), model_path)
+    print("New model saved!")
+
+# Step 9: Generate sequences based on the RNN and temperature sampling
 def generate_sequence(model, prompt, max_length=30, temperature=1.0):
     model.eval()  # Set the model to evaluation mode
 
@@ -103,7 +107,7 @@ def generate_sequence(model, prompt, max_length=30, temperature=1.0):
 
     return " ".join(generated_sequence)  # Join the sequence of words
 
-# Step 9: Generate sequences based on the RNN and temperature sampling
+# Generate sequences based on the updated model and temperature sampling
 generated_sequences = []
 for prompt, _ in responses:
     generated_sequence = generate_sequence(model, prompt, max_length=30, temperature=0.7)  # Adjust temperature as needed
@@ -112,3 +116,7 @@ for prompt, _ in responses:
 # Print out the generated sequences
 for i, seq in enumerate(generated_sequences):
     print(f"Generated Sequence {i+1}: {seq}")
+
+# Step 10: Save the new model with updated embeddings and fully connected layer
+model_path = "new_rnn_model.pth"
+save_model(model, model_path)

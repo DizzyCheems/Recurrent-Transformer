@@ -125,6 +125,14 @@ class AttentionStreamModel(nn.Module):
         return self.fc(x[:, -1, :])
 
     def generate(self, context, max_length=20, temperature=1.0):
+        """
+        Generate text given a context with temperature sampling.
+
+        :param context: The starting sequence for generation
+        :param max_length: Maximum length of the generated sequence
+        :param temperature: Controls randomness in predictions
+        :return: List of generated word indices
+        """
         self.eval()
         generated = []
         current_seq = context.to(self.embeddings.weight.device)
@@ -132,13 +140,17 @@ class AttentionStreamModel(nn.Module):
         with torch.no_grad():
             for _ in range(max_length):
                 output = self(current_seq)
-                probs = torch.softmax(output / temperature, dim=1)
-                next_idx = torch.argmax(probs, dim=1)
-                generated.append(next_idx.item())
-                current_seq = torch.cat([current_seq[:, 1:], next_idx.unsqueeze(0)], dim=1)
-                
+                # Apply temperature to logits
+                scaled_output = output / temperature
+                # Convert logits to probabilities
+                probs = torch.softmax(scaled_output, dim=1)
+                # Sample next word based on probability distribution
+                next_idx = torch.multinomial(probs, 1).item()
+                generated.append(next_idx)
+                # Update current sequence by adding the newly generated word
+                current_seq = torch.cat([current_seq[:, 1:], torch.tensor([[next_idx]], device=current_seq.device)], dim=1)
+        
         return generated
-
 # Hyperparameters
 embedding_dim = 50
 vocab_size = len(word_to_index) + 1
