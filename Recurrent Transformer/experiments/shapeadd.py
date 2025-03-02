@@ -1,34 +1,26 @@
 import ollama  # Import Ollama
 
-# Function to interact with TinyLlama model
-def get_tinyllama_response(prompt: str):
-    # Chat with TinyLlama model
-    response = ollama.chat(model="tinyllama", messages=[{"role": "user", "content": prompt}])
-    
-    # Print the entire response to check its structure (for debugging)
-    print("Raw Response:", response)
-    
-    # Try to extract the correct key, assuming the key is 'message' (check and update based on your observation)
-    if 'message' in response:
-        return response['message']
-    elif 'text' in response:
-        return response['text']
-    else:
-        return "No response text found"
-
-# Function to colorize the response blue in a terminal (if running in a console)
-def color_response_blue(response: str):
-    return f"\033[94mTinyLlama:\n\n{response}\033[0m"
-
-# Sample prompt
+# Sample prompts (new set of prompts)
 prompts = [
-    "What is the fundamental principle of counting?",
-    "What is the multiplication rule in probability?",
+    "What is Bayes' Theorem?",
+    "Explain the law of total probability.",
 ]
 
-# Collect responses from TinyLlama model for each prompt
-responses = [get_tinyllama_response(prompt) for prompt in prompts]
-
-# Print out and colorize the responses
-for response in responses:
-    print(color_response_blue(response))
+# Open the 'response.txt' file in append mode (to add to the file, not overwrite it)
+with open('response.txt', 'a') as file:
+    # Loop through each prompt and generate a response using TinyLlama
+    for prompt in prompts:
+        # Generate response from the TinyLlama model
+        response = ollama.chat(model="tinyllama", messages=[{"role": "user", "content": prompt}])
+        
+        # Print the response to inspect its structure (for debugging)
+        print(response)
+        
+        # Check if the response contains a 'text' key or use the correct key
+        if 'text' in response:
+            file.write(f"Prompt: {prompt}\n")
+            file.write(f"Response: {response['text']}\n\n")
+        else:
+            # Handle case when 'text' is not found, print the whole response
+            file.write(f"Prompt: {prompt}\n")
+            file.write(f"Response (no 'text' key): {response}\n\n")
