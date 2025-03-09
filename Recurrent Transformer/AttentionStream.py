@@ -4,6 +4,7 @@ import numpy as np
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from collections import Counter
 import os
+from rouge_score import rouge_scorer  # Import ROUGE scorer
 
 # Load the data
 with open('data.txt', 'r', encoding='utf-8') as file:
@@ -163,22 +164,8 @@ else:
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
 
-# Evaluate the model and calculate perplexity
-def evaluate_perplexity(model, eval_dataloader):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for batch_X, batch_y in eval_dataloader:
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            outputs = model(batch_X)
-            loss = criterion(outputs, batch_y)
-            total_loss += loss.item()
-    
-    avg_loss = total_loss / len(eval_dataloader)
-    perplexity = np.exp(avg_loss)
-    print(f'Perplexity on evaluation set: {perplexity}')
-
-evaluate_perplexity(model, eval_dataloader)
+# ROUGE scorer setup
+scorer = rouge_scorer.RougeScorer(['rouge1', 'rouge2', 'rougeL'], use_stemmer=True)
 
 # Softmax with temperature
 def sample_with_temperature(logits, temperature=1.0):
@@ -194,10 +181,9 @@ def predict_next_word(sequence, word_to_index, index_to_word, model, temperature
         output = model(sequence)
         next_word_idx = sample_with_temperature(output, temperature)
         next_word = index_to_word[next_word_idx.item()]
-        print(f"Predicted next word: {next_word}")
         return next_word
 
-# Interactive generation
+# Interactive generation with ROUGE scoring
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
     input_seq = input("\033[94mInput: \033[0m")
@@ -205,9 +191,17 @@ while True:
         break
     
     generated = input_seq.split()
+    true_sequence = []  # To store the true next words for ROUGE scoring
     for _ in range(20):  # Generate 20 words
         context = ' '.join(generated[-seq_length:])
         next_word = predict_next_word(context, word_to_index, index_to_word, model, temperature=0.8)
         generated.append(next_word)
+        true_sequence.append(next_word)
     
-    print(f"\033[92mGenerated: {' '.join(generated[len(input_seq.split()):])}\033[0m\n")
+    # Compute ROUGE score for the generated sequence vs. the true sequence
+    generated_text = ' '.join(generated)
+    reference_text = ' '.join(true_sequence)
+    
+    scores = scorer.score(reference_text, generated_text)
+    print(f"Generated: {generated_text}")
+    print(f"ROUGE Scores: {scores}\n")  # Show ROUGE scores for each generation
