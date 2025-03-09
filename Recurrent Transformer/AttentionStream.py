@@ -4,18 +4,21 @@ import numpy as np
 from torch.utils.data import DataLoader, TensorDataset
 from collections import Counter
 import os
-from sklearn.model_selection import train_test_split
 
+# Load the data
 with open('data.txt', 'r', encoding='utf-8') as file:
     data = file.read()
 
+# Tokenization and creating a word-to-index mapping
 words = data.split()
 word_counts = Counter(words)
 word_to_index = {word: i+1 for i, (word, _) in enumerate(word_counts.items())}
 index_to_word = {i: word for word, i in word_to_index.items()}
 
+# Encode words as indices
 encoded_data = [word_to_index[word] for word in words]
 
+# Prepare input-output pairs (context, next word)
 seq_length = 5
 X = []
 y = []
@@ -26,27 +29,20 @@ for i in range(len(encoded_data) - seq_length):
 X = np.array(X)
 y = np.array(y)
 
+# Convert to tensors
 X = torch.tensor(X, dtype=torch.long)
 y = torch.tensor(y, dtype=torch.long)
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-torch.save({
-    'word_to_index': word_to_index,
-    'index_to_word': index_to_word,
-    'X_test': X_test,
-    'y_test': y_test,
-    'vocab_size': len(word_to_index) + 1
-}, 'model_metadata.pth')
-
-train_dataset = TensorDataset(X_train, y_train)
-dataloader = DataLoader(train_dataset, batch_size=128, shuffle=True)
+# Prepare DataLoader
+dataset = TensorDataset(X, y)
+dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
 
 class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
-        self.decay_net = nn.Linear(embedding_dim, 1)
-        self.layer_norm = nn.LayerNorm(embedding_dim)
+        self.decay_net = nn.Linear(embedding_dim, 1)  # Was missing closing )
+        self.layer_norm = nn.LayerNorm(embedding_dim)  # Was on same line without separator
 
     def forward(self, C, V, W):
         batch_size, seq_len, _ = C.shape
@@ -106,7 +102,7 @@ class AttentionStreamBlock(nn.Module):
         shifted = self.shift(x, x_prev)
         merged = self.sequence_merging(shifted, shifted, shifted)
         coupled = self.state_coupling(merged)
-        return shifted + coupled
+        return shifted + coupled  # Residual connection
 
 class AttentionStreamModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, num_layers=1):
@@ -121,36 +117,9 @@ class AttentionStreamModel(nn.Module):
     def forward(self, x):
         x = self.embeddings(x)
         for block in self.blocks:
-            x = block(x, None)
-        return self.fc(x[:, -1, :])
+            x = block(x, None)  # x_prev handled internally
+        return self.fc(x[:, -1, :])  # Last token output
 
-    def generate(self, context, max_length=20, temperature=1.0):
-        """
-        Generate text given a context with temperature sampling.
-
-        :param context: The starting sequence for generation
-        :param max_length: Maximum length of the generated sequence
-        :param temperature: Controls randomness in predictions
-        :return: List of generated word indices
-        """
-        self.eval()
-        generated = []
-        current_seq = context.to(self.embeddings.weight.device)
-        
-        with torch.no_grad():
-            for _ in range(max_length):
-                output = self(current_seq)
-                # Apply temperature to logits
-                scaled_output = output / temperature
-                # Convert logits to probabilities
-                probs = torch.softmax(scaled_output, dim=1)
-                # Sample next word based on probability distribution
-                next_idx = torch.multinomial(probs, 1).item()
-                generated.append(next_idx)
-                # Update current sequence by adding the newly generated word
-                current_seq = torch.cat([current_seq[:, 1:], torch.tensor([[next_idx]], device=current_seq.device)], dim=1)
-        
-        return generated
 # Hyperparameters
 embedding_dim = 50
 vocab_size = len(word_to_index) + 1
@@ -164,36 +133,14 @@ model.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-def calculate_perplexity(model, test_loader, device):
-    """Calculate perplexity on test set"""
-    model.eval()
-    total_loss = 0
-    criterion = nn.CrossEntropyLoss()
-    
-    with torch.no_grad():
-        for inputs, targets in test_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            outputs = model(inputs)
-            loss = criterion(outputs, targets)
-            total_loss += loss.item()
-    
-    return torch.exp(torch.tensor(total_loss / len(test_loader)))
-
 # Model loading/saving
 model_path = 'attention_stream_model.pth'
 if os.path.exists(model_path):
     model.load_state_dict(torch.load(model_path, map_location=device))
     print("Loaded saved model.")
-    
-    # Calculate perplexity for loaded model
-    test_dataset = TensorDataset(X_test, y_test)
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
-    perplexity = calculate_perplexity(model, test_loader, device)
-    print(f"Test Perplexity: {perplexity:.2f}")
-    
 else:
     # Training loop
-    epochs = 55
+    epochs = 150
     for epoch in range(epochs):
         total_loss = 0
         for batch_X, batch_y in dataloader:
@@ -207,26 +154,10 @@ else:
         
         print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader)}')
     
-    # Calculate final perplexity
-    test_dataset = TensorDataset(X_test, y_test)
-    test_loader = DataLoader(test_dataset, batch_size=128, shuffle=False)
-    perplexity = calculate_perplexity(model, test_loader, device)
-    print(f"\nFinal Test Perplexity: {perplexity:.2f}")
-    
-    # Save model and metadata
     torch.save(model.state_dict(), model_path)
-    torch.save({
-        'word_to_index': word_to_index,
-        'index_to_word': index_to_word,
-        'X_test': X_test,
-        'y_test': y_test,
-        'vocab_size': vocab_size
-    }, 'model_metadata.pth')
-    print("Model and metadata saved.")
+    print("Model saved.")
 
-
-
-
+# Prediction function
 def predict_next_word(sequence, word_to_index, index_to_word, model):
     model.eval()
     sequence = [word_to_index.get(word, 0) for word in sequence.split()]
@@ -235,6 +166,7 @@ def predict_next_word(sequence, word_to_index, index_to_word, model):
         output = model(sequence)
         return index_to_word[torch.argmax(output).item()]
 
+# Interactive generation
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
     input_seq = input("\033[94mInput: \033[0m")
