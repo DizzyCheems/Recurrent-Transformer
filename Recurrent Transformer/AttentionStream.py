@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, TensorDataset, random_split
 from collections import Counter
 import os
 
@@ -33,21 +33,28 @@ y = np.array(y)
 X = torch.tensor(X, dtype=torch.long)
 y = torch.tensor(y, dtype=torch.long)
 
-# Prepare DataLoader
+# Prepare dataset
 dataset = TensorDataset(X, y)
-dataloader = DataLoader(dataset, batch_size=256, shuffle=True)
+
+# Split into 80% training and 20% evaluation
+train_size = int(0.8 * len(dataset))
+eval_size = len(dataset) - train_size
+train_dataset, eval_dataset = random_split(dataset, [train_size, eval_size])
+
+# DataLoader
+train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True)
+eval_dataloader = DataLoader(eval_dataset, batch_size=256, shuffle=False)
 
 class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
-        self.decay_net = nn.Linear(embedding_dim, 1)  # Was missing closing )
-        self.layer_norm = nn.LayerNorm(embedding_dim)  # Was on same line without separator
+        self.decay_net = nn.Linear(embedding_dim, 1)  
+        self.layer_norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, C, V, W):
         batch_size, seq_len, _ = C.shape
         
-        # Initialize a and b for each sequence in the batch
         a = torch.zeros(batch_size, 1, device=C.device)
         b = torch.zeros(batch_size, self.embedding_dim, device=C.device)
         
@@ -57,7 +64,6 @@ class SequenceMergingSeq(nn.Module):
             V_t = V[:, t, :]
             W_t = W[:, t, :]
             
-            # Update a and b incrementally
             decay = torch.sigmoid(self.decay_net(W_t))
             a = decay * a + torch.exp(C_t).sum(dim=1, keepdim=True)
             b = decay * b + (torch.exp(C_t) * V_t)
@@ -117,7 +123,7 @@ class AttentionStreamModel(nn.Module):
     def forward(self, x):
         x = self.embeddings(x)
         for block in self.blocks:
-            x = block(x, None)  # x_prev handled internally
+            x = block(x, None)
         return self.fc(x[:, -1, :])  # Last token output
 
 # Hyperparameters
@@ -143,7 +149,7 @@ else:
     epochs = 150
     for epoch in range(epochs):
         total_loss = 0
-        for batch_X, batch_y in dataloader:
+        for batch_X, batch_y in train_dataloader:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
             outputs = model(batch_X)
@@ -152,18 +158,33 @@ else:
             optimizer.step()
             total_loss += loss.item()
         
-        print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(dataloader)}')
+        print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(train_dataloader)}')
     
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
 
+# Evaluate the model and calculate perplexity
+def evaluate_perplexity(model, eval_dataloader):
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch_X, batch_y in eval_dataloader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+            outputs = model(batch_X)
+            loss = criterion(outputs, batch_y)
+            total_loss += loss.item()
+    
+    avg_loss = total_loss / len(eval_dataloader)
+    perplexity = np.exp(avg_loss)
+    print(f'Perplexity on evaluation set: {perplexity}')
+
+evaluate_perplexity(model, eval_dataloader)
+
 # Softmax with temperature
 def sample_with_temperature(logits, temperature=1.0):
-    # Apply temperature scaling
     logits = logits / temperature
     probs = torch.softmax(logits, dim=-1)
-    print("Probabilities:", probs)  # Debugging line to see the distribution
-    return torch.multinomial(probs, 1)  # Sample one word from the distribution
+    return torch.multinomial(probs, 1)
 
 def predict_next_word(sequence, word_to_index, index_to_word, model, temperature=1.0):
     model.eval()
@@ -173,7 +194,7 @@ def predict_next_word(sequence, word_to_index, index_to_word, model, temperature
         output = model(sequence)
         next_word_idx = sample_with_temperature(output, temperature)
         next_word = index_to_word[next_word_idx.item()]
-        print(f"Predicted next word: {next_word}")  # Debugging line to show predicted word
+        print(f"Predicted next word: {next_word}")
         return next_word
 
 # Interactive generation
@@ -186,7 +207,7 @@ while True:
     generated = input_seq.split()
     for _ in range(20):  # Generate 20 words
         context = ' '.join(generated[-seq_length:])
-        next_word = predict_next_word(context, word_to_index, index_to_word, model, temperature=0.8)  # Experiment with temperature
+        next_word = predict_next_word(context, word_to_index, index_to_word, model, temperature=0.8)
         generated.append(next_word)
     
     print(f"\033[92mGenerated: {' '.join(generated[len(input_seq.split()):])}\033[0m\n")
