@@ -108,7 +108,7 @@ class AttentionStreamModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, num_layers=1):
         super(AttentionStreamModel, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.blocks = nn.ModuleList([
+        self.blocks = nn.ModuleList([ 
             AttentionStreamBlock(embedding_dim)
             for _ in range(num_layers)
         ])
@@ -157,14 +157,24 @@ else:
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
 
-# Prediction function
-def predict_next_word(sequence, word_to_index, index_to_word, model):
+# Softmax with temperature
+def sample_with_temperature(logits, temperature=1.0):
+    # Apply temperature scaling
+    logits = logits / temperature
+    probs = torch.softmax(logits, dim=-1)
+    print("Probabilities:", probs)  # Debugging line to see the distribution
+    return torch.multinomial(probs, 1)  # Sample one word from the distribution
+
+def predict_next_word(sequence, word_to_index, index_to_word, model, temperature=1.0):
     model.eval()
     sequence = [word_to_index.get(word, 0) for word in sequence.split()]
     sequence = torch.tensor(sequence, dtype=torch.long).unsqueeze(0).to(device)
     with torch.no_grad():
         output = model(sequence)
-        return index_to_word[torch.argmax(output).item()]
+        next_word_idx = sample_with_temperature(output, temperature)
+        next_word = index_to_word[next_word_idx.item()]
+        print(f"Predicted next word: {next_word}")  # Debugging line to show predicted word
+        return next_word
 
 # Interactive generation
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
@@ -174,8 +184,9 @@ while True:
         break
     
     generated = input_seq.split()
-    for _ in range(20):
+    for _ in range(20):  # Generate 20 words
         context = ' '.join(generated[-seq_length:])
-        generated.append(predict_next_word(context, word_to_index, index_to_word, model))
+        next_word = predict_next_word(context, word_to_index, index_to_word, model, temperature=0.8)  # Experiment with temperature
+        generated.append(next_word)
     
     print(f"\033[92mGenerated: {' '.join(generated[len(input_seq.split()):])}\033[0m\n")
