@@ -5,6 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset, random_split
 from collections import Counter
 import os
 from rouge_score import rouge_scorer
+import torch.nn.functional as F
 
 # Load the data
 with open('data.txt', 'r', encoding='utf-8') as file:
@@ -166,23 +167,6 @@ else:
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
 
-# Evaluate the model and calculate perplexity
-def evaluate_perplexity(model, eval_dataloader):
-    model.eval()
-    total_loss = 0
-    with torch.no_grad():
-        for batch_X, batch_y in eval_dataloader:
-            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            outputs = model(batch_X)
-            loss = criterion(outputs, batch_y)
-            total_loss += loss.item()
-    
-    avg_loss = total_loss / len(eval_dataloader)
-    perplexity = np.exp(avg_loss)
-    print(f'Perplexity on evaluation set: {perplexity}')
-
-evaluate_perplexity(model, eval_dataloader)
-
 # ROUGE Scorer
 scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
 
@@ -208,6 +192,44 @@ def predict_next_word(sequence, word_to_index, index_to_word, model, temperature
         next_word = index_to_word[next_word_idx.item()]
         return next_word
 
+# Define explicit reference sequences for certain inputs
+reference_sequences = {
+    "count 1 to 10": [
+        "Here", "are", "the", "first", "10", "natural", "numbers", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"
+    ],
+    "What is the fastest land animal?": [
+        "The", "fastest", "land", "animal", "is", "the", "cheetah", "which", "can", "reach", "speeds", "of", "up", "to", "60", "miles", "per", "hour", "97", "kilometers", "per", "hour", "in", "short", "bursts", "covering", "distances", "of", "up", "to", "1500", "feet", "460", "meters"
+    ]
+}
+
+# Cosine similarity function
+def cosine_similarity(vec1, vec2):
+    """
+    Compute cosine similarity between two vectors.
+    vec1: Tensor of shape (batch_size, embedding_dim)
+    vec2: Tensor of shape (batch_size, embedding_dim)
+    Returns the cosine similarity score between two vectors.
+    """
+    return F.cosine_similarity(vec1, vec2, dim=-1)
+
+def get_sequence_embedding(sequence, model, word_to_index, device):
+    """
+    Get the embedding for the given sequence using the model.
+    sequence: List of words
+    model: Trained model
+    word_to_index: Word to index mapping
+    device: The device (cuda or cpu)
+    """
+    # Convert sequence to indices
+    sequence_indices = [word_to_index.get(word, 0) for word in sequence]
+    sequence_tensor = torch.tensor(sequence_indices, dtype=torch.long).unsqueeze(0).to(device)
+    
+    # Get embeddings from model
+    with torch.no_grad():
+        embeddings = model.embeddings(sequence_tensor)  # Get word embeddings
+        return embeddings.mean(dim=1)  # Average the embeddings of the words in the sequence
+
+
 # Interactive generation with ROUGE score calculation
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
@@ -216,7 +238,7 @@ while True:
         break
     
     generated = input_seq.split()
-    reference = input_seq.split()  # Use the input as a reference for ROUGE evaluation
+    reference = reference_sequences.get(input_seq, input_seq.split())  # Use explicit reference if available
 
     for _ in range(20):  # Generate 20 words
         context = ' '.join(generated[-seq_length:])
@@ -227,4 +249,14 @@ while True:
     rouge_score = compute_rouge_score(reference, generated[len(input_seq.split()):])
     print(f"ROUGE Score: {rouge_score}")
     
+
+    # Get the embeddings for the reference and generated sequences
+    reference_embedding = get_sequence_embedding(reference, model, word_to_index, device)
+    generated_embedding = get_sequence_embedding(generated[len(input_seq.split()):], model, word_to_index, device)
+
+    # Compute cosine similarity between the reference and generated sequences
+    similarity = cosine_similarity(reference_embedding, generated_embedding)
+    print(f"Cosine Similarity: {similarity.item():.4f}")
+ 
+
     print(f"\033[92mGenerated: {' '.join(generated[len(input_seq.split()):])}\033[0m\n")
