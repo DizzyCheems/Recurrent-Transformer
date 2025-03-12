@@ -35,7 +35,7 @@ y = np.array(y)
 X = torch.tensor(X, dtype=torch.long)
 y = torch.tensor(y, dtype=torch.long)
 
-# Prepare dataset
+# Dataset processor
 dataset = TensorDataset(X, y)
 
 # Split into 80% training and 20% evaluation
@@ -47,13 +47,12 @@ train_dataset, eval_dataset = random_split(dataset, [train_size, eval_size])
 train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True)
 eval_dataloader = DataLoader(eval_dataset, batch_size=256, shuffle=False)
 
-# Define your model and layers
-
 class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
-        self.decay_net = nn.Linear(embedding_dim, 1)  
+        # learnable Time Modulation parameter
+        self.time_modulation = nn.Parameter(torch.ones(1, 1, embedding_dim) * 0.5)  # Learnable decay per dimension
         self.layer_norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, C, V, W):
@@ -64,12 +63,13 @@ class SequenceMergingSeq(nn.Module):
         
         outputs = []
         for t in range(seq_len):
-            C_t = C[:, t, :]
+            C_t = C[:, t, :]  # Current token
             V_t = V[:, t, :]
             W_t = W[:, t, :]
             
-            decay = torch.sigmoid(self.decay_net(W_t))
-            a = decay * a + torch.exp(C_t).sum(dim=1, keepdim=True)
+            # Time Modulation: Dynamic decay based on W_t and learnable parameter
+            decay = torch.sigmoid(W_t * self.time_modulation.expand(batch_size, -1, -1).squeeze(1))
+            a = decay.mean(dim=1, keepdim=True) * a + torch.exp(C_t).sum(dim=1, keepdim=True)
             b = decay * b + (torch.exp(C_t) * V_t)
             
             output_t = b / (a + 1e-8)
@@ -135,7 +135,7 @@ embedding_dim = 50
 vocab_size = len(word_to_index) + 1
 model = AttentionStreamModel(vocab_size, embedding_dim)
 
-# Device setup
+# Host Device setup
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
@@ -143,14 +143,14 @@ model.to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-# Model loading/saving
+# Save the Model
 model_path = 'attention_stream_model.pth'
 if os.path.exists(model_path):
     model.load_state_dict(torch.load(model_path, map_location=device))
     print("Loaded saved model.")
 else:
-    # Training loop
-    epochs = 150
+    # Training iterations
+    epochs = 180
     for epoch in range(epochs):
         total_loss = 0
         for batch_X, batch_y in train_dataloader:
@@ -167,12 +167,12 @@ else:
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
 
-# ROUGE Scorer
+# ROUGE Scorer Evaluators
 scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
 
 def compute_rouge_score(reference, generated):
-    reference = ' '.join(reference)  # Join words to form the sentence
-    generated = ' '.join(generated)  # Join words to form the sentence
+    reference = ' '.join(reference)
+    generated = ' '.join(generated)
     scores = scorer.score(reference, generated)
     return scores
 
@@ -204,31 +204,14 @@ reference_sequences = {
 
 # Cosine similarity function
 def cosine_similarity(vec1, vec2):
-    """
-    Compute cosine similarity between two vectors.
-    vec1: Tensor of shape (batch_size, embedding_dim)
-    vec2: Tensor of shape (batch_size, embedding_dim)
-    Returns the cosine similarity score between two vectors.
-    """
     return F.cosine_similarity(vec1, vec2, dim=-1)
 
 def get_sequence_embedding(sequence, model, word_to_index, device):
-    """
-    Get the embedding for the given sequence using the model.
-    sequence: List of words
-    model: Trained model
-    word_to_index: Word to index mapping
-    device: The device (cuda or cpu)
-    """
-    # Convert sequence to indices
     sequence_indices = [word_to_index.get(word, 0) for word in sequence]
     sequence_tensor = torch.tensor(sequence_indices, dtype=torch.long).unsqueeze(0).to(device)
-    
-    # Get embeddings from model
     with torch.no_grad():
-        embeddings = model.embeddings(sequence_tensor)  # Get word embeddings
-        return embeddings.mean(dim=1)  # Average the embeddings of the words in the sequence
-
+        embeddings = model.embeddings(sequence_tensor)
+        return embeddings.mean(dim=1)
 
 # Interactive generation with ROUGE score calculation
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
@@ -238,25 +221,19 @@ while True:
         break
     
     generated = input_seq.split()
-    reference = reference_sequences.get(input_seq, input_seq.split())  # Use explicit reference if available
+    reference = reference_sequences.get(input_seq, input_seq.split())
 
-    for _ in range(20):  # Generate 20 words
+    for _ in range(20):
         context = ' '.join(generated[-seq_length:])
         next_word = predict_next_word(context, word_to_index, index_to_word, model, temperature=0.8)
         generated.append(next_word)
     
-    # Compute ROUGE score for this generated sequence
     rouge_score = compute_rouge_score(reference, generated[len(input_seq.split()):])
     print(f"ROUGE Score: {rouge_score}")
     
-
-    # Get the embeddings for the reference and generated sequences
     reference_embedding = get_sequence_embedding(reference, model, word_to_index, device)
     generated_embedding = get_sequence_embedding(generated[len(input_seq.split()):], model, word_to_index, device)
-
-    # Compute cosine similarity between the reference and generated sequences
     similarity = cosine_similarity(reference_embedding, generated_embedding)
     print(f"Cosine Similarity: {similarity.item():.4f}")
- 
-
+    
     print(f"\033[92mGenerated: {' '.join(generated[len(input_seq.split()):])}\033[0m\n")

@@ -18,27 +18,27 @@ def get_tinyllama_response(prompt: str):
 
 # Sample prompts
 prompts = [
-    "What is the fundamental principle of counting?",
-    "What is the multiplication rule in probability?",
-    "Can you explain the addition rule in probability?",
-    "What is the difference between permutations and combinations?",
-    "How do you calculate the probability of an event?",
-    "What is a sample space in probability?",
-    "Can you describe what a factorial is and how it's used?",
-    "What is the concept of expected value in probability?",
-    "How do you determine the number of ways to arrange a set of objects?",
-    "What is the significance of the binomial theorem?",
-    "Can you explain the concept of conditional probability?",
-    "What is the law of large numbers?",
-    "How do you calculate combinations and permutations?",
-    "What is the role of counting in statistics?",
-    "Can you provide an example of a real-world application of counting principles?",
-    "What is the concept of independence in probability?",
-    "How does the central limit theorem relate to counting?",
-    "What are some common counting techniques used in combinatorics?",
-    "Can you explain the pigeonhole principle?",
-    "What is the difference between discrete and continuous probability distributions?",
-    "How do you use counting to solve problems in game theory?"
+    "Count from 1 to 20.",
+    "List the numbers from 5 to 15.",
+    "Can you count backward from 10 to 1?",
+    "Enumerate the first ten even numbers.",
+    "Count the odd numbers between 1 and 30.",
+    "What are the numbers from 1 to 50 in increments of 5?",
+    "Can you list the prime numbers up to 30?",
+    "Count the numbers in the range of 1 to 100 that are divisible by 3.",
+    "How many numbers are there between 1 and 100?",
+    "Can you count the multiples of 7 from 1 to 70?",
+    "List the numbers from 1 to 10 in reverse order.",
+    "Count the total number of digits in the numbers from 1 to 100.",
+    "What are the first ten Fibonacci numbers?",
+    "Can you count the numbers that are both even and greater than 10?",
+    "How many integers are there between -10 and 10?",
+    "Count the numbers from 1 to 100 that end with the digit 5.",
+    "Can you list the numbers from 1 to 12 and their squares?",
+    "Count the total number of vowels in the numbers from 1 to 20 when spelled out.",
+    "What is the sum of all numbers from 1 to 50?",
+    "Can you explain how to count the total number of outcomes when rolling two dice?",
+    "How do you count the number of ways to select 3 items from a set of 10?"
 ]
 
 # Collect responses from TinyLlama model for each prompt
