@@ -6,6 +6,7 @@ from collections import Counter
 import os
 from rouge_score import rouge_scorer
 import torch.nn.functional as F
+import math
 
 # Load the data
 with open('data.txt', 'r', encoding='utf-8') as file:
@@ -51,8 +52,8 @@ class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
-        # learnable Time Modulation parameter
-        self.time_modulation = nn.Parameter(torch.ones(1, 1, embedding_dim) * 0.5)  # Learnable decay per dimension
+        # Learnable Time Modulation parameter
+        self.time_modulation = nn.Parameter(torch.ones(1, 1, embedding_dim) * 0.5)
         self.layer_norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, C, V, W):
@@ -67,7 +68,7 @@ class SequenceMergingSeq(nn.Module):
             V_t = V[:, t, :]
             W_t = W[:, t, :]
             
-            # Time Modulation: Dynasmic decay based on W_t and learnable parameter
+            # Time Modulation: Dynamic decay based on W_t and learnable parameter
             decay = torch.sigmoid(W_t * self.time_modulation.expand(batch_size, -1, -1).squeeze(1))
             a = decay.mean(dim=1, keepdim=True) * a + torch.exp(C_t).sum(dim=1, keepdim=True)
             b = decay * b + (torch.exp(C_t) * V_t)
@@ -166,6 +167,27 @@ else:
     
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
+
+# Calculate perplexity on validation set
+def calculate_perplexity(model, dataloader, criterion, device):
+    model.eval()
+    total_loss = 0
+    total_words = 0
+    with torch.no_grad():
+        for batch_X, batch_y in dataloader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+            outputs = model(batch_X)
+            loss = criterion(outputs, batch_y)
+            total_loss += loss.item() * batch_X.size(0)  # Scale by batch size
+            total_words += batch_X.size(0)
+    avg_loss = total_loss / total_words
+    perplexity = math.exp(avg_loss)
+    return perplexity
+
+# Evaluate perplexity after training
+if not os.path.exists(model_path):
+    perplexity = calculate_perplexity(model, eval_dataloader, criterion, device)
+    print(f'Perplexity on validation set: {perplexity:.4f}')
 
 # ROUGE Scorer Evaluators
 scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
