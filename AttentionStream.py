@@ -67,7 +67,7 @@ class SequenceMergingSeq(nn.Module):
             V_t = V[:, t, :]
             W_t = W[:, t, :]
             
-            # Time Modulation: Dynamic decay based on W_t and learnable parameter
+            # Time Modulation: Dynasmic decay based on W_t and learnable parameter
             decay = torch.sigmoid(W_t * self.time_modulation.expand(batch_size, -1, -1).squeeze(1))
             a = decay.mean(dim=1, keepdim=True) * a + torch.exp(C_t).sum(dim=1, keepdim=True)
             b = decay * b + (torch.exp(C_t) * V_t)
