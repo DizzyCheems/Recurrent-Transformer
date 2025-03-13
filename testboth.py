@@ -10,12 +10,12 @@ import math
 import matplotlib.pyplot as plt
 
 # Load and preprocess data
-with open('testerdata.txt', 'r', encoding='utf-8') as file:
+with open('data.txt', 'r', encoding='utf-8') as file:
     data = file.read()
 
 words = data.split()
 word_counts = Counter(words)
-word_to_index = {word: i+1 for i, (word, _) in enumerate(word_counts.items())}  # Start at 1 (0 for padding)
+word_to_index = {word: i+1 for i, (word, _) in enumerate(word_counts.items())}
 index_to_word = {i: word for word, i in word_to_index.items()}
 vocab_size = len(word_to_index) + 1
 
@@ -38,7 +38,7 @@ eval_dataloader = DataLoader(eval_dataset, batch_size=256, shuffle=False)
 # Device setup
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Enhanced Hybrid Model (Attention-Stream Model)
+# Attention Stream Model Components (No Transformer Attention)
 class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
@@ -87,34 +87,62 @@ class Shift(nn.Module):
         return self.mu * x + (1 - self.mu) * x_prev
 
 class AttentionStreamBlock(nn.Module):
-    def __init__(self, embedding_dim, n_heads=8, dropout=0.2):
+    def __init__(self, embedding_dim):
         super(AttentionStreamBlock, self).__init__()
         self.shift = Shift(embedding_dim)
         self.sequence_merging = SequenceMergingSeq(embedding_dim)
         self.state_coupling = StateCoupling(embedding_dim)
-        self.multihead_attn = nn.MultiheadAttention(embedding_dim, n_heads, dropout=dropout, batch_first=True)
-        self.ffn = nn.Sequential(
-            nn.Linear(embedding_dim, embedding_dim * 4),
-            nn.ReLU(),
-            nn.Linear(embedding_dim * 4, embedding_dim),
-            nn.Dropout(dropout)
-        )
-        self.layer_norm1 = nn.LayerNorm(embedding_dim)
-        self.layer_norm2 = nn.LayerNorm(embedding_dim)
-        self.layer_norm3 = nn.LayerNorm(embedding_dim)
-        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, x_prev):
         shifted = self.shift(x, x_prev)
-        attn_output, _ = self.multihead_attn(shifted, shifted, shifted)
-        attn_output = self.dropout(attn_output)
-        x = self.layer_norm1(shifted + attn_output)
-        merged = self.sequence_merging(x, x, x)
+        merged = self.sequence_merging(shifted, shifted, shifted)
         coupled = self.state_coupling(merged)
-        x = self.layer_norm2(x + coupled)
-        ffn_output = self.ffn(x)
-        return self.layer_norm3(x + ffn_output)
+        return shifted + coupled
 
+class AttentionStreamEncoder(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, num_layers=3):
+        super(AttentionStreamEncoder, self).__init__()
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.blocks = nn.ModuleList([
+            AttentionStreamBlock(embedding_dim) for _ in range(num_layers)
+        ])
+
+    def forward(self, x):
+        x = self.embeddings(x)
+        for block in self.blocks:
+            x = block(x, None)
+        return x.mean(dim=1)
+
+class AttentionStreamDecoder(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, num_layers=3):
+        super(AttentionStreamDecoder, self).__init__()
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.blocks = nn.ModuleList([
+            AttentionStreamBlock(embedding_dim) for _ in range(num_layers)
+        ])
+        self.cross_attention = nn.Linear(embedding_dim, embedding_dim)
+        self.fc = nn.Linear(embedding_dim, vocab_size)
+
+    def forward(self, x, encoder_output):
+        x = self.embeddings(x)
+        for block in self.blocks:
+            x = block(x, None)
+        attn_weights = self.cross_attention(encoder_output).unsqueeze(1)
+        x = x + attn_weights
+        return self.fc(x[:, -1, :])
+
+class AttentionStreamSeq2Seq(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, num_layers=3):
+        super(AttentionStreamSeq2Seq, self).__init__()
+        self.encoder = AttentionStreamEncoder(vocab_size, embedding_dim, num_layers)
+        self.decoder = AttentionStreamDecoder(vocab_size, embedding_dim, num_layers)
+
+    def forward(self, input_seq, target_seq):
+        encoder_output = self.encoder(input_seq)
+        decoder_output = self.decoder(target_seq, encoder_output)
+        return decoder_output
+
+# Transformer Model
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, dropout=0.1, max_len=5000):
         super(PositionalEncoding, self).__init__()
@@ -131,25 +159,6 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
-class AttentionStreamModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, num_layers=4, n_heads=8, dropout=0.2):
-        super(AttentionStreamModel, self).__init__()
-        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.pos_encoder = PositionalEncoding(embedding_dim, dropout)
-        self.blocks = nn.ModuleList([
-            AttentionStreamBlock(embedding_dim, n_heads, dropout) for _ in range(num_layers)
-        ])
-        self.fc = nn.Linear(embedding_dim, vocab_size)
-        self.embedding_dim = embedding_dim
-
-    def forward(self, x):
-        x = self.embeddings(x) * math.sqrt(self.embedding_dim)
-        x = self.pos_encoder(x)
-        for block in self.blocks:
-            x = block(x, None)
-        return self.fc(x[:, -1, :])
-
-# Transformer Model
 class TransformerModel(nn.Module):
     def __init__(self, vocab_size, embedding_dim, n_heads, n_layers, dropout=0.1):
         super(TransformerModel, self).__init__()
@@ -166,14 +175,14 @@ class TransformerModel(nn.Module):
         x = self.embedding(x) * math.sqrt(self.embedding_dim)
         x = self.pos_encoder(x)
         if mask is None:
-            mask = nn.Transformer.generate_square_subsequent_mask(x.size(1)).to(x.device)
+            mask = nn.Transformer.generate_square_subsequent_mask(x.size(1)).to(x.device).bool()  # Convert to bool
         x = self.transformer_encoder(x, mask)
         return self.fc(x[:, -1, :])
 
-# Training Function with Scheduler
+# Training Function
 def train_model(model, train_dataloader, eval_dataloader, epochs, device, model_path):
     criterion = nn.CrossEntropyLoss()
-    lr = 0.002 if isinstance(model, AttentionStreamModel) else 0.001  # Higher LR for hybrid
+    lr = 0.002 if isinstance(model, AttentionStreamSeq2Seq) else 0.001
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.9)
     
@@ -187,7 +196,11 @@ def train_model(model, train_dataloader, eval_dataloader, epochs, device, model_
             for batch_X, batch_y in train_dataloader:
                 batch_X, batch_y = batch_X.to(device), batch_y.to(device)
                 optimizer.zero_grad()
-                outputs = model(batch_X)
+                if isinstance(model, AttentionStreamSeq2Seq):
+                    outputs = model(batch_X, batch_X)  # AttentionStreamSeq2Seq takes input_seq, target_seq
+                else:  # TransformerModel
+                    mask = nn.Transformer.generate_square_subsequent_mask(batch_X.size(1)).to(device).bool()
+                    outputs = model(batch_X, mask)
                 loss = criterion(outputs, batch_y)
                 loss.backward()
                 optimizer.step()
@@ -205,7 +218,11 @@ def calculate_perplexity(model, dataloader, criterion, device):
     with torch.no_grad():
         for batch_X, batch_y in dataloader:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            outputs = model(batch_X)
+            if isinstance(model, AttentionStreamSeq2Seq):
+                outputs = model(batch_X, batch_X)
+            else:
+                mask = nn.Transformer.generate_square_subsequent_mask(batch_X.size(1)).to(device).bool()
+                outputs = model(batch_X, mask)
             loss = criterion(outputs, batch_y)
             total_loss += loss.item() * batch_X.size(0)
             total_words += batch_X.size(0)
@@ -222,7 +239,12 @@ def predict_sequence(model, input_seq, word_to_index, index_to_word, seq_length,
     with torch.no_grad():
         for _ in range(max_len):
             input_tensor = torch.tensor([generated[-seq_length:]], dtype=torch.long).to(device)
-            output = model(input_tensor)
+            if isinstance(model, AttentionStreamSeq2Seq):
+                encoder_output = model.encoder(input_tensor)
+                output = model.decoder(input_tensor, encoder_output)
+            else:
+                mask = nn.Transformer.generate_square_subsequent_mask(input_tensor.size(1)).to(device).bool()
+                output = model(input_tensor, mask)
             probs = torch.softmax(output / temperature, dim=-1)
             next_word_idx = torch.multinomial(probs, 1).item()
             generated.append(next_word_idx)
@@ -239,7 +261,7 @@ def evaluate_model(model, dataloader, word_to_index, index_to_word, seq_length, 
     model.eval()
     with torch.no_grad():
         for i, (batch_X, batch_y) in enumerate(dataloader):
-            if i >= 10:  # Limit to 10 samples
+            if i >= 10:
                 break
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             input_seq = ' '.join([index_to_word[idx.item()] for idx in batch_X[0]])
@@ -251,7 +273,7 @@ def evaluate_model(model, dataloader, word_to_index, index_to_word, seq_length, 
             scores = scorer.score(ref_text, gen_text)
             rouge_scores.append(scores)
             
-            embedding_layer = model.embeddings if isinstance(model, AttentionStreamModel) else model.embedding
+            embedding_layer = model.encoder.embeddings if isinstance(model, AttentionStreamSeq2Seq) else model.embedding
             ref_emb = embedding_layer(batch_y[:seq_length].unsqueeze(0).to(device)).mean(dim=1)
             gen_ids = torch.tensor([[word_to_index.get(w, 0) for w in generated]], dtype=torch.long).to(device)
             gen_emb = embedding_layer(gen_ids).mean(dim=1)
@@ -278,13 +300,11 @@ def estimate_memory(model, input_shape, dtype_size=4):
     for layer in model.modules():
         if isinstance(layer, nn.Linear):
             activation_size += batch_size * layer.out_features * dtype_size
-        elif isinstance(layer, nn.MultiheadAttention):
-            activation_size += batch_size * seq_len * layer.embed_dim * dtype_size * 3
-    return param_size + activation_size  # Total memory in bytes
+    return param_size + activation_size
 
 # Initialize and Train Models
 embedding_dim = 64
-hybrid_model = AttentionStreamModel(vocab_size, embedding_dim, num_layers=4, n_heads=8, dropout=0.2).to(device)
+hybrid_model = AttentionStreamSeq2Seq(vocab_size, embedding_dim, num_layers=3).to(device)
 transformer_model = TransformerModel(vocab_size, embedding_dim, n_heads=4, n_layers=2, dropout=0.1).to(device)
 
 train_model(hybrid_model, train_dataloader, eval_dataloader, epochs=50, device=device, model_path="hybrid_model.pth")
@@ -372,4 +392,4 @@ plot_perplexity(hybrid_results, transformer_results)
 plot_rouge(hybrid_results, transformer_results)
 plot_cosine_similarity(hybrid_results, transformer_results)
 plot_memory_params(hybrid_params, transformer_params, hybrid_memory, transformer_memory)
-plt.show()  # Display all plots
+plt.show()
