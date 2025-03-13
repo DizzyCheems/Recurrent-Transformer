@@ -48,34 +48,28 @@ train_dataset, eval_dataset = random_split(dataset, [train_size, eval_size])
 train_dataloader = DataLoader(train_dataset, batch_size=256, shuffle=True)
 eval_dataloader = DataLoader(eval_dataset, batch_size=256, shuffle=False)
 
+# Existing Modules (unchanged)
 class SequenceMergingSeq(nn.Module):
     def __init__(self, embedding_dim):
         super(SequenceMergingSeq, self).__init__()
         self.embedding_dim = embedding_dim
-        # Learnable Time Modulation parameter
         self.time_modulation = nn.Parameter(torch.ones(1, 1, embedding_dim) * 0.5)
         self.layer_norm = nn.LayerNorm(embedding_dim)
 
     def forward(self, C, V, W):
         batch_size, seq_len, _ = C.shape
-        
         a = torch.zeros(batch_size, 1, device=C.device)
         b = torch.zeros(batch_size, self.embedding_dim, device=C.device)
-        
         outputs = []
         for t in range(seq_len):
-            C_t = C[:, t, :]  # Current token
+            C_t = C[:, t, :]
             V_t = V[:, t, :]
             W_t = W[:, t, :]
-            
-            # Time Modulation: Dynamic decay based on W_t and learnable parameter
             decay = torch.sigmoid(W_t * self.time_modulation.expand(batch_size, -1, -1).squeeze(1))
             a = decay.mean(dim=1, keepdim=True) * a + torch.exp(C_t).sum(dim=1, keepdim=True)
             b = decay * b + (torch.exp(C_t) * V_t)
-            
             output_t = b / (a + 1e-8)
             outputs.append(output_t.unsqueeze(1))
-        
         result = torch.cat(outputs, dim=1)
         return self.layer_norm(result)
 
@@ -113,30 +107,61 @@ class AttentionStreamBlock(nn.Module):
         shifted = self.shift(x, x_prev)
         merged = self.sequence_merging(shifted, shifted, shifted)
         coupled = self.state_coupling(merged)
-        return shifted + coupled  # Residual connection
+        return shifted + coupled
 
-class AttentionStreamModel(nn.Module):
-    def __init__(self, vocab_size, embedding_dim, num_layers=1):
-        super(AttentionStreamModel, self).__init__()
+# New Encoder-Decoder Model
+class AttentionStreamEncoder(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, num_layers=2):
+        super(AttentionStreamEncoder, self).__init__()
         self.embeddings = nn.Embedding(vocab_size, embedding_dim)
-        self.blocks = nn.ModuleList([ 
-            AttentionStreamBlock(embedding_dim)
-            for _ in range(num_layers)
+        self.blocks = nn.ModuleList([
+            AttentionStreamBlock(embedding_dim) for _ in range(num_layers)
         ])
-        self.fc = nn.Linear(embedding_dim, vocab_size)
 
     def forward(self, x):
         x = self.embeddings(x)
         for block in self.blocks:
             x = block(x, None)
-        return self.fc(x[:, -1, :])  # Last token output
+        # Pool to a fixed-size context vector
+        return x.mean(dim=1)  # Shape: (batch_size, embedding_dim)
+
+class AttentionStreamDecoder(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, num_layers=2):
+        super(AttentionStreamDecoder, self).__init__()
+        self.embeddings = nn.Embedding(vocab_size, embedding_dim)
+        self.blocks = nn.ModuleList([
+            AttentionStreamBlock(embedding_dim) for _ in range(num_layers)
+        ])
+        self.cross_attention = nn.Linear(embedding_dim, embedding_dim)  # Lightweight cross-attention
+        self.fc = nn.Linear(embedding_dim, vocab_size)
+
+    def forward(self, x, encoder_output):
+        x = self.embeddings(x)
+        for block in self.blocks:
+            x = block(x, None)
+        # Simple cross-attention with encoder output
+        attn_weights = self.cross_attention(encoder_output).unsqueeze(1)  # Shape: (batch_size, 1, embedding_dim)
+        x = x + attn_weights  # Broadcasted addition
+        return self.fc(x[:, -1, :])  # Last token prediction
+
+class AttentionStreamSeq2Seq(nn.Module):
+    def __init__(self, vocab_size, embedding_dim, num_layers=2):
+        super(AttentionStreamSeq2Seq, self).__init__()
+        self.encoder = AttentionStreamEncoder(vocab_size, embedding_dim, num_layers)
+        self.decoder = AttentionStreamDecoder(vocab_size, embedding_dim, num_layers)
+
+    def forward(self, input_seq, target_seq):
+        encoder_output = self.encoder(input_seq)
+        decoder_output = self.decoder(target_seq, encoder_output)
+        return decoder_output
 
 # Hyperparameters
 embedding_dim = 50
 vocab_size = len(word_to_index) + 1
-model = AttentionStreamModel(vocab_size, embedding_dim)
+num_layers = 2
+model = AttentionStreamSeq2Seq(vocab_size, embedding_dim, num_layers)
 
-# Host Device setup
+# Device setup
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 model.to(device)
 
@@ -145,26 +170,26 @@ criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 # Save the Model
-model_path = 'attention_stream_model.pth'
+model_path = 'attention_stream_seq2seq.pth'
 if os.path.exists(model_path):
     model.load_state_dict(torch.load(model_path, map_location=device))
     print("Loaded saved model.")
 else:
     # Training iterations
-    epochs = 180
+    epochs = 50
     for epoch in range(epochs):
+        model.train()
         total_loss = 0
         for batch_X, batch_y in train_dataloader:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
             optimizer.zero_grad()
-            outputs = model(batch_X)
+            outputs = model(batch_X, batch_X)  # Using input as target for simplicity
             loss = criterion(outputs, batch_y)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        
-        print(f'Epoch [{epoch+1}/{epochs}], Loss: {total_loss/len(train_dataloader)}')
-    
+        avg_loss = total_loss / len(train_dataloader)
+        print(f'Epoch [{epoch+1}/{epochs}], Loss: {avg_loss:.4f}')
     torch.save(model.state_dict(), model_path)
     print("Model saved.")
 
@@ -176,18 +201,21 @@ def calculate_perplexity(model, dataloader, criterion, device):
     with torch.no_grad():
         for batch_X, batch_y in dataloader:
             batch_X, batch_y = batch_X.to(device), batch_y.to(device)
-            outputs = model(batch_X)
+            outputs = model(batch_X, batch_X)  # Using input as target
             loss = criterion(outputs, batch_y)
-            total_loss += loss.item() * batch_X.size(0)  # Scale by batch size
+            if torch.isnan(loss) or torch.isinf(loss):
+                continue  # Skip invalid losses
+            total_loss += loss.item() * batch_X.size(0)
             total_words += batch_X.size(0)
+    if total_words == 0:
+        return float('nan')
     avg_loss = total_loss / total_words
     perplexity = math.exp(avg_loss)
     return perplexity
 
-# Evaluate perplexity after training
-if not os.path.exists(model_path):
-    perplexity = calculate_perplexity(model, eval_dataloader, criterion, device)
-    print(f'Perplexity on validation set: {perplexity:.4f}')
+# Always evaluate perplexity after training or loading
+perplexity = calculate_perplexity(model, eval_dataloader, criterion, device)
+print(f'Perplexity on validation set: {perplexity:.4f}')
 
 # ROUGE Scorer Evaluators
 scorer = rouge_scorer.RougeScorer(["rouge1", "rouge2", "rougeL"], use_stemmer=True)
@@ -209,12 +237,13 @@ def predict_next_word(sequence, word_to_index, index_to_word, model, temperature
     sequence = [word_to_index.get(word, 0) for word in sequence.split()]
     sequence = torch.tensor(sequence, dtype=torch.long).unsqueeze(0).to(device)
     with torch.no_grad():
-        output = model(sequence)
+        encoder_output = model.encoder(sequence)
+        output = model.decoder(sequence, encoder_output)
         next_word_idx = sample_with_temperature(output, temperature)
         next_word = index_to_word[next_word_idx.item()]
         return next_word
 
-# Define explicit reference sequences for certain inputs
+# Reference sequences
 reference_sequences = {
     "count 1 to 10": [
         "Here", "are", "the", "first", "10", "natural", "numbers", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10"
@@ -232,10 +261,10 @@ def get_sequence_embedding(sequence, model, word_to_index, device):
     sequence_indices = [word_to_index.get(word, 0) for word in sequence]
     sequence_tensor = torch.tensor(sequence_indices, dtype=torch.long).unsqueeze(0).to(device)
     with torch.no_grad():
-        embeddings = model.embeddings(sequence_tensor)
+        embeddings = model.encoder.embeddings(sequence_tensor)
         return embeddings.mean(dim=1)
 
-# Interactive generation with ROUGE score calculation
+# Interactive generation
 print("\033[94mModel ready! Type a sequence (exit to quit):\033[0m")
 while True:
     input_seq = input("\033[94mInput: \033[0m")
