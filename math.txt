@@ -1,0 +1,14 @@
+What is 2 plus 3?
+5. Steps: Start with 2, then add 3. This means 2 becomes 2 + 1 = 3, then 3 + 1 = 4, and 4 + 1 = 5. Conclusion: Therefore, 2 plus 3 equals 5.
+
+If I have 5 apples and eat 2, how many are left?
+3 apples. Steps: Begin with 5 apples. Eating 2 means subtracting 2 from 5. So, 5 - 2 = 3. Conclusion: Thus, you have 3 apples left after eating 2.
+
+What’s the next number in the sequence 1, 3, 5, 7?
+9. Steps: Observe the sequence: 1, 3, 5, 7. Each number increases by 2—1 + 2 = 3, 3 + 2 = 5, 5 + 2 = 7. So, 7 + 2 = 9. Conclusion: The next number is 9 because the pattern adds 2 each time.
+
+If today is Monday, what day is it in 3 days?
+Thursday. Steps: Start with Monday. Add 1 day to get Tuesday, then 1 more to get Wednesday, and 1 more to get Thursday. That’s 3 days total. Conclusion: In 3 days from Monday, it’s Thursday.
+
+What is 4 times 5?
+20. Steps: Multiplication means repeated addition. Add 4 five times: 4 + 4 = 8, 8 + 4 = 12, 12 + 4 = 16, 16 + 4 = 20. Or, 4 * 5 = 20 directly. Conclusion: So, 4 times 5 equals 20.

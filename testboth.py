@@ -304,7 +304,7 @@ def estimate_memory(model, input_shape, dtype_size=4):
 
 # Initialize and Train Models
 embedding_dim = 64
-hybrid_model = AttentionStreamSeq2Seq(vocab_size, embedding_dim, num_layers=3).to(device)
+hybrid_model = AttentionStreamSeq2Seq(vocab_size, embedding_dim, num_layers=4).to(device)
 transformer_model = TransformerModel(vocab_size, embedding_dim, n_heads=4, n_layers=2, dropout=0.1).to(device)
 
 train_model(hybrid_model, train_dataloader, eval_dataloader, epochs=50, device=device, model_path="hybrid_model.pth")
