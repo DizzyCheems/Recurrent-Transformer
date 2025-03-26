@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 async def refine_response(input_seq, attentionstream_response):
     """
-    Refines the AttentionStream response using Llama3 via ollama.
+    Refines the AttentionStream response using Llama3 via ollama.Yuu ^ ^
     Returns a refined response limited to 20 words, without meta-commentary.
     """
     loop = asyncio.get_event_loop()
